@@ -36,7 +36,7 @@ npm run preview  # Preview production build
 - `light-hum.mp3`: Looping fluorescent light buzz
 - `footsteps.mp3`: Random distant footsteps
 - `door-close.mp3`: Random distant door closing
-- `phone-ring.mp3`: Phone ringing sound, loops when player is within 2-3 chunks of a wall phone (volume increases with proximity)
+- `phone-ring.mp3`: Phone ringing sound, loops when player is within 3 chunks of a wall phone (volume uses cubic falloff - very quiet far away, loud only when very close)
 
 **Graphics** (`public/graphics/`):
 - `wallpaper.png`: Wall texture using Backrooms color palette
