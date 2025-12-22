@@ -47,7 +47,11 @@ npm run preview  # Preview production build
 
 **Floor/Ceiling System**:
 - Floor: Per-chunk procedural carpet shader with yellow-green base color and fiber texture pattern
-- Ceiling: Single fixed infinite plane with tiled drop ceiling texture
+- Ceiling: Per-chunk tiled drop ceiling texture (each chunk has its own ceiling tile)
+
+**Debug Mode** (press `O` key):
+- Toggles visibility of wall normal debug lines (red)
+- Toggles chunk border visualization (transparent red walls at chunk boundaries)
 
 **Shared resources**: Geometries and materials are created once in `createGlobalResources()` and reused across all chunks for performance.
 
