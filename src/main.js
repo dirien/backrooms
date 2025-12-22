@@ -36,6 +36,52 @@ const PLAYER_RADIUS = 0.5;
 
 let audioCtx;
 
+// Wall shader with baked ambient occlusion at edges
+const WALL_SHADER = {
+    uniforms: {
+        "wallTexture": { value: null },
+        "aoStrength": { value: 0.4 }  // How dark the edges get
+    },
+    vertexShader: `
+        varying vec2 vUv;
+        varying vec3 vWorldPos;
+        varying vec3 vLocalPos;
+        void main() {
+            vUv = uv;
+            vLocalPos = position;
+            vec4 worldPos = modelMatrix * vec4(position, 1.0);
+            vWorldPos = worldPos.xyz;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: `
+        uniform sampler2D wallTexture;
+        uniform float aoStrength;
+        varying vec2 vUv;
+        varying vec3 vWorldPos;
+        varying vec3 vLocalPos;
+
+        void main() {
+            vec4 texColor = texture2D(wallTexture, vUv);
+
+            // Calculate AO based on distance from top/bottom edges
+            // Wall geometry is centered, so local y goes from -1.5 to +1.5
+            // Normalize to 0-1 range
+            float heightNorm = (vLocalPos.y + 1.5) / 3.0;  // 0 at bottom, 1 at top
+
+            // Darken near floor (heightNorm=0) and ceiling (heightNorm=1)
+            float floorAO = smoothstep(0.0, 0.2, heightNorm);   // Dark at bottom 20%
+            float ceilAO = smoothstep(1.0, 0.8, heightNorm);    // Dark at top 20%
+            float ao = min(floorAO, ceilAO);
+
+            // Apply AO - darker at edges
+            vec3 finalColor = texColor.rgb * mix(1.0 - aoStrength, 1.0, ao);
+
+            gl_FragColor = vec4(finalColor, texColor.a);
+        }
+    `
+};
+
 const POST_SHADER = {
     uniforms: {
         "tDiffuse": { value: null },
@@ -217,22 +263,25 @@ function createGlobalResources() {
     const tileWorldSize = 1.5;
     ceilTex.repeat.set(planeSize / tileWorldSize, planeSize / tileWorldSize);
 
-    wallMat = new THREE.MeshStandardMaterial({ map: wallTex, roughness: 1.0, metalness: 0, color: 0xffffff });
-
-    // Floor with procedural carpet shader
-    floorMat = new THREE.ShaderMaterial({
-        uniforms: THREE.UniformsUtils.clone(CARPET_SHADER.uniforms),
-        vertexShader: CARPET_SHADER.vertexShader,
-        fragmentShader: CARPET_SHADER.fragmentShader,
+    // Wall material - Lambert is faster and less finicky than Standard
+    wallMat = new THREE.MeshLambertMaterial({
+        map: wallTex,
         side: THREE.FrontSide
     });
-    // Ceiling tiles - whiter look
+
+    // Floor material
+    floorMat = new THREE.MeshLambertMaterial({
+        color: 0xa9a865, 
+        side: THREE.FrontSide
+    });
+
+    // Ceiling tiles
     ceilingMat = new THREE.MeshStandardMaterial({
         map: ceilTex,
         roughness: 0.95,
         metalness: 0,
-        color: 0xbbbbbb,  // Whiter ceiling
-        side: THREE.DoubleSide  // Render both sides - simpler than fighting rotations
+        color: 0xbbbbbb,
+        side: THREE.DoubleSide
     });
     lightPanelMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
 
@@ -327,6 +376,7 @@ function generateChunk(cx, cz) {
     floor.position.set(0, 0, 0);
     floor.matrixAutoUpdate = false;
     floor.updateMatrix();
+    floor.receiveShadow = true; // Floor receives shadows
     group.add(floor);
 
     // Walls and lights
@@ -340,6 +390,8 @@ function generateChunk(cx, cz) {
                 wall.position.set(pos, 1.5, -CHUNK_SIZE / 2 + j * cellSize + cellSize / 2);
                 wall.matrixAutoUpdate = false;
                 wall.updateMatrix();
+                wall.castShadow = true;    // Walls cast shadows
+                wall.receiveShadow = true; // Walls receive shadows
                 group.add(wall); walls.push(wall);
             }
             if (rnd(seed + i * 13 + j) > 0.65) {
@@ -347,6 +399,8 @@ function generateChunk(cx, cz) {
                 wall.position.set(-CHUNK_SIZE / 2 + j * cellSize + cellSize / 2, 1.5, pos);
                 wall.matrixAutoUpdate = false;
                 wall.updateMatrix();
+                wall.castShadow = true;
+                wall.receiveShadow = true;
                 group.add(wall); walls.push(wall);
             }
         }
@@ -365,6 +419,9 @@ function generateChunk(cx, cz) {
             lightPanels.push(panel);
         }
     }
+
+    // Simplified: No per-chunk lights. Rely on Ambient + Camera Light.
+    // This fixes the 12 FPS issue and the "pitch black" shadows.
 
     // Create debug normal lines for walls (visible when debug mode is on)
     const normalLineMat = new THREE.LineBasicMaterial({ color: 0xff0000 });
@@ -710,6 +767,8 @@ async function initGame() {
     renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(window.devicePixelRatio > 1 ? 1 : window.devicePixelRatio);
+    renderer.shadowMap.enabled = true; // Shadows enabled again
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     document.body.appendChild(renderer.domElement);
 
     composer = new EffectComposer(renderer);
@@ -728,9 +787,18 @@ async function initGame() {
     composer.addPass(effect);
 
     clock = new THREE.Clock();
-    // Even ambient lighting - the main light source for backrooms look
-    // Ambient light using backrooms palette (pale golden)
-    scene.add(new THREE.AmbientLight(0xd7d3a2, 4.0));
+    
+    // 1. Base Ambient Light - Significantly increased for high visibility
+    scene.add(new THREE.AmbientLight(0xd7d3a2, 2.5));
+
+    // 2. Player "Presence" Light - Subtler now that ambient is high
+    const playerLight = new THREE.PointLight(0xffffee, 0.5, 10, 2);
+    playerLight.position.set(0, 0, 0);
+    camera.add(playerLight);
+    scene.add(camera);
+
+    // Fog: Reduced density and changed color to match the walls for a brighter look
+    scene.fog = new THREE.FogExp2(0x333322, 0.02);
 
     // Create infinite ceiling (floor is per-chunk)
     createInfiniteCeiling();
