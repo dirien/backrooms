@@ -45,7 +45,7 @@ npm run preview  # Preview production build
 
 **3D Models** (`public/models/`):
 - `wall_outlet_american.glb`: American-style wall outlet, randomly placed on walls (5% chance per wall)
-- `corded_public_phone_-_low_poly.glb`: Corded public phone, very rarely placed on walls (0.5% chance per wall)
+- `corded_public_phone_-_low_poly.glb`: Corded public phone, very rarely placed on walls (0.5% chance per wall). Phones never spawn within 4 chunks of the starting position (0,0) to force players to explore deeper into the Backrooms
 
 **Floor/Ceiling System**:
 - Floor: Per-chunk procedural carpet shader with yellow-green base color and fiber texture pattern
@@ -55,6 +55,17 @@ npm run preview  # Preview production build
 - Toggles visibility of wall normal debug lines (red)
 - Toggles chunk border visualization (transparent red walls at chunk boundaries)
 - Press `N`/`M` to cycle through sanity levels (100%, 80%, 50%, 30%, 10%, 0%) for testing distortion effects
+
+**Game Objective**:
+- Find a telephone hidden deep in the Backrooms and call for help before sanity drains completely
+- Start screen displays the objective to the player
+- Phones only spawn 4+ chunks away from the starting position, requiring exploration
+
+**Wake-up Effect**:
+- When the game starts, a shader-based eye-opening effect plays (2 seconds)
+- Simulates regaining consciousness with blinking/struggling to open eyes
+- Includes blur effect that clears as eyes open
+- Implemented via `WAKEUP_SHADER` post-processing pass
 
 **Sanity System**:
 - Sanity drains over time while the player is moving

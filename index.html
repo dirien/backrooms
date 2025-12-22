@@ -107,9 +107,26 @@
             display: flex; flex-direction: column; justify-content: center; align-items: center;
             z-index: 100;
         }
-        .header { text-align: center; margin-bottom: 20px; }
-        .header h1 { font-size: 3rem; letter-spacing: 15px; margin: 0; font-weight: 100; }
-        .header p { opacity: 0.5; letter-spacing: 2px; font-size: 0.8rem; }
+        .header { text-align: center; margin-bottom: 30px; }
+        .header h1 { font-size: 5rem; letter-spacing: 20px; margin: 0; font-weight: 100; }
+        .header p { opacity: 0.5; letter-spacing: 3px; font-size: 1rem; margin-top: 10px; }
+
+        .objective {
+            max-width: 600px;
+            text-align: center;
+            margin: 40px 0;
+            padding: 0 30px;
+        }
+        .objective p {
+            font-size: 1.1rem;
+            line-height: 2;
+            margin: 0;
+            opacity: 0.7;
+        }
+        .objective .highlight {
+            color: #ffcc44;
+            opacity: 1;
+        }
 
         button {
             background: transparent;
@@ -135,6 +152,7 @@
             transform: translate(-50%, -50%);
             display: none;
         }
+
     </style>
 </head>
 <body>
@@ -144,7 +162,14 @@
             <h1>BACKROOMS</h1>
             <p>LEVEL 0: THE LOBBY</p>
         </div>
-        <button onclick="initGame()">NOCLIP</button>
+        <div class="objective">
+            <p>
+                You have noclipped into the Backrooms.<br><br>
+                <span class="highlight">Find a telephone</span> hidden deep within the endless corridors and <span class="highlight">call for help</span> before your sanity drains completely.<br><br>
+                Move fast. The deeper you go, the closer you get to escape... or to being <span class="highlight">forever lost</span>.
+            </p>
+        </div>
+        <button onclick="initGame()">ENTER THE BACKROOMS</button>
     </div>
 
     <div id="ui-overlay">
