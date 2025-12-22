@@ -31,7 +31,7 @@ npm run preview  # Preview production build
 - **Lighting**: Ambient lighting with bloom effect on rectangular fluorescent light panels. Light panel proximity affects audio volume.
 - **Audio**: Web Audio API with MP3 sound files - looping fluorescent light hum (volume increases near light panels), random distant footsteps, and door close sounds
 
-**Key globals**: `scene`, `camera`, `renderer`, `composer`, `chunks` (Map), `walls` (array), `lightPanels` (array), `playerSanity`, `frustum`, `frustumMatrix`
+**Key globals**: `scene`, `camera`, `renderer`, `composer`, `chunks` (Map), `walls` (array), `lightPanels` (array), `playerSanity`, `frustum`, `frustumMatrix`, `hudScene`, `hudCamera`
 
 **Audio files** (`public/sounds/`):
 - `light-hum.mp3`: Looping fluorescent light buzz
@@ -71,7 +71,9 @@ npm run preview  # Preview production build
 **Sanity System**:
 - Sanity drains over time while the player is moving
 - Drain rate accelerates at lower sanity thresholds (0.15/sec base, up to 0.6/sec at critical levels)
-- UI displays a styled sanity bar with percentage, color changes at low levels
+- HUD rendered in Three.js using a separate orthographic scene (`hudScene`/`hudCamera`) with canvas textures for text
+- Sanity bar with "SANITY" label and percentage, color changes at low levels (yellow → orange → red)
+- Pulsing effect on the bar at critical sanity levels
 - Progressive visual distortion effects at different sanity thresholds:
   - **80%**: Subtle wave distortion (drain: 0.2/sec)
   - **50%**: Chromatic aberration, stronger waves, green tint (drain: 0.25/sec)
@@ -81,7 +83,7 @@ npm run preview  # Preview production build
 **Mobile/Touch Support**:
 - Automatic detection of touch devices (iOS, Android)
 - Virtual joystick (bottom-left) for movement control
-- Touch-drag zone (rest of screen) for camera rotation
+- Touch-drag zone covers entire screen except joystick area (L-shaped clip-path)
 - Responsive UI adjustments for smaller screens
 - Audio context handling for iOS Safari autoplay restrictions
 
