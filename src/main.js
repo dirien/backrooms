@@ -21,6 +21,7 @@ let isStarted = false;
 let debugMode = false;
 let debugNormals = [];
 let chunkBorders = [];
+let debugSanityOverride = -1; // -1 means no override, 0-4 are the sanity levels
 
 let fpsFrames = 0;
 let fpsPrevTime = performance.now();
@@ -112,24 +113,128 @@ const POST_SHADER = {
             return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
         }
 
+        float noise(vec2 p) {
+            vec2 i = floor(p);
+            vec2 f = fract(p);
+            f = f * f * (3.0 - 2.0 * f);
+            float a = random(i);
+            float b = random(i + vec2(1.0, 0.0));
+            float c = random(i + vec2(0.0, 1.0));
+            float d = random(i + vec2(1.0, 1.0));
+            return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+        }
+
         void main() {
             vec2 uv = vUv;
             float sFac = clamp(1.0 - sanity, 0.0, 1.0);
-
             vec2 centeredUv = uv - 0.5;
             float d = length(centeredUv);
+
+            // === LEVEL 1: sanity <= 80% - Subtle wave distortion ===
+            float level1 = smoothstep(0.8, 0.7, sanity);
+            float wave1 = sin(uv.y * 15.0 + time * 2.0) * 0.003 * level1;
+            uv.x += wave1;
+
+            // === LEVEL 2: sanity <= 50% - Chromatic aberration + stronger waves ===
+            float level2 = smoothstep(0.5, 0.4, sanity);
+            float wave2 = sin(uv.x * 20.0 + time * 3.0) * cos(uv.y * 10.0 + time) * 0.006 * level2;
+            uv += vec2(wave2, wave2 * 0.5);
+
+            // === LEVEL 3: sanity <= 30% - Tunnel vision + pulsing + heavy distortion ===
+            float level3 = smoothstep(0.3, 0.2, sanity);
+            float pulse = sin(time * 4.0) * 0.5 + 0.5;
+            float tunnel = d * d * 0.15 * level3 * (1.0 + pulse * 0.3);
+            uv += centeredUv * tunnel;
+
+            // Spiral distortion
+            float angle = atan(centeredUv.y, centeredUv.x);
+            float spiral = sin(angle * 3.0 + time * 2.0 + d * 10.0) * 0.008 * level3;
+            uv += vec2(cos(angle), sin(angle)) * spiral;
+
+            // === LEVEL 4: sanity <= 10% - Complete insanity ===
+            float level4 = smoothstep(0.1, 0.0, sanity);
+
+            // Violent screen shake
+            float shake = level4 * 0.02;
+            uv.x += (random(vec2(time * 10.0, 0.0)) - 0.5) * shake;
+            uv.y += (random(vec2(0.0, time * 10.0)) - 0.5) * shake;
+
+            // Reality fracturing - multiple image displacement
+            float fracture = sin(time * 8.0 + uv.y * 30.0) * 0.015 * level4;
+            uv.x += fracture;
+
+            // Kaleidoscope effect
+            if (level4 > 0.5) {
+                float kAngle = atan(centeredUv.y, centeredUv.x);
+                float kDist = length(centeredUv);
+                kAngle = mod(kAngle + time * 0.5, 3.14159 / 3.0) - 3.14159 / 6.0;
+                vec2 kUv = vec2(cos(kAngle), sin(kAngle)) * kDist + 0.5;
+                uv = mix(uv, kUv, level4 * 0.3);
+            }
+
+            // Base barrel distortion
             uv += centeredUv * d * d * 0.04;
 
-            float warp = sin(uv.x * 10.0 + time) * 0.0015 * sFac;
+            // Base sanity warp (original)
+            float warp = sin(uv.x * 10.0 + time) * 0.002 * sFac;
             uv.y += warp;
 
+            // Sample the texture
             vec4 col = texture2D(tDiffuse, uv);
-            col.rgb += (random(uv + time) - 0.5) * 0.05;
 
+            // === Chromatic aberration (levels 2-4) ===
+            float chromaStrength = level2 * 0.008 + level3 * 0.015 + level4 * 0.03;
+            if (chromaStrength > 0.0) {
+                vec2 chromaDir = normalize(centeredUv) * chromaStrength;
+                col.r = texture2D(tDiffuse, uv + chromaDir).r;
+                col.b = texture2D(tDiffuse, uv - chromaDir).b;
+            }
+
+            // === Film grain (increases with insanity) ===
+            float grain = (random(uv + time) - 0.5) * (0.05 + sFac * 0.15);
+            col.rgb += grain;
+
+            // === Color shifts ===
+            // Level 2+: Slight color desaturation and green tint
             float gray = dot(col.rgb, vec3(0.299, 0.587, 0.114));
-            col.rgb = mix(col.rgb, vec3(gray), sFac * 0.5);
+            col.rgb = mix(col.rgb, vec3(gray), sFac * 0.4);
+            col.g += level2 * 0.03; // Sickly green tint
 
-            col.rgb *= smoothstep(1.0, 0.35, d);
+            // Level 3+: Color cycling
+            if (level3 > 0.0) {
+                vec3 tint = vec3(
+                    sin(time * 1.5) * 0.5 + 0.5,
+                    sin(time * 1.5 + 2.094) * 0.5 + 0.5,
+                    sin(time * 1.5 + 4.188) * 0.5 + 0.5
+                );
+                col.rgb = mix(col.rgb, col.rgb * tint, level3 * 0.2);
+            }
+
+            // Level 4: Intense color inversion flashes
+            if (level4 > 0.0) {
+                float flash = step(0.95, random(vec2(floor(time * 8.0), 0.0)));
+                col.rgb = mix(col.rgb, 1.0 - col.rgb, flash * level4);
+            }
+
+            // === Vignette (gets stronger and pulses) ===
+            float vignetteBase = smoothstep(1.0, 0.35, d);
+            float vignettePulse = level3 > 0.0 ? (sin(time * 3.0) * 0.1 + 0.9) : 1.0;
+            float vignetteStrength = vignetteBase * vignettePulse;
+            vignetteStrength = mix(vignetteStrength, vignetteStrength * 0.7, level4); // Darker at low sanity
+            col.rgb *= vignetteStrength;
+
+            // === Scan lines (level 4) ===
+            if (level4 > 0.0) {
+                float scanline = sin(vUv.y * 400.0 + time * 50.0) * 0.5 + 0.5;
+                col.rgb *= 1.0 - scanline * 0.15 * level4;
+            }
+
+            // === Double vision (level 3+) ===
+            if (level3 > 0.0) {
+                vec2 offset = vec2(0.01 + level4 * 0.02, 0.005) * (sin(time * 2.0) * 0.5 + 0.5);
+                vec4 ghost = texture2D(tDiffuse, uv + offset);
+                col.rgb = mix(col.rgb, ghost.rgb, level3 * 0.25);
+            }
 
             gl_FragColor = col;
         }
@@ -403,7 +508,28 @@ function toggleDebugMode() {
     chunkBorders.forEach(border => {
         border.visible = debugMode;
     });
+    if (!debugMode) {
+        debugSanityOverride = -1; // Reset sanity override when exiting debug mode
+    }
     console.log('Debug mode:', debugMode ? 'ON' : 'OFF');
+}
+
+// Cycle through sanity levels for debugging (only works in debug mode)
+const DEBUG_SANITY_LEVELS = [100, 80, 50, 30, 10, 0]; // Normal, then thresholds
+function cycleSanityLevel(direction) {
+    if (!debugMode) return;
+
+    if (debugSanityOverride === -1) {
+        // First time cycling - find closest level to current sanity
+        debugSanityOverride = 0;
+    } else {
+        debugSanityOverride += direction;
+        if (debugSanityOverride < 0) debugSanityOverride = DEBUG_SANITY_LEVELS.length - 1;
+        if (debugSanityOverride >= DEBUG_SANITY_LEVELS.length) debugSanityOverride = 0;
+    }
+
+    playerSanity = DEBUG_SANITY_LEVELS[debugSanityOverride];
+    console.log('Debug sanity level:', playerSanity + '%');
 }
 
 // Create chunk border visualization (transparent red walls)
@@ -1031,8 +1157,33 @@ function animate() {
         const next = camera.position.clone().addScaledVector(velocity, delta);
         next.y = 1.7; handleCollision(next); camera.position.copy(next);
 
-        playerSanity -= delta * 0.08;
-        document.getElementById('sanity-bar').style.width = Math.max(0, playerSanity) + '%';
+        // Only drain sanity if not in debug override mode
+        if (debugSanityOverride === -1) {
+            playerSanity -= delta * 0.5; // Much faster sanity drain
+            playerSanity = Math.max(0, playerSanity);
+        }
+
+        // Update sanity bar
+        const sanityBar = document.getElementById('sanity-bar');
+        const sanityPercent = document.getElementById('sanity-percent');
+        const uiOverlay = document.getElementById('ui-overlay');
+
+        sanityBar.style.width = playerSanity + '%';
+        sanityPercent.innerText = Math.round(playerSanity) + '%';
+
+        // Shift gradient to show more red as sanity drops
+        const gradientPos = 100 - (100 - playerSanity) * 1.5;
+        sanityBar.style.backgroundPosition = Math.max(0, gradientPos) + '% 0';
+
+        // Update CSS classes for visual effects
+        uiOverlay.classList.remove('sanity-warning', 'sanity-low', 'sanity-critical');
+        if (playerSanity <= 10) {
+            uiOverlay.classList.add('sanity-critical');
+        } else if (playerSanity <= 30) {
+            uiOverlay.classList.add('sanity-low');
+        } else if (playerSanity <= 50) {
+            uiOverlay.classList.add('sanity-warning');
+        }
     }
 
     updateChunks();
@@ -1106,6 +1257,8 @@ async function initGame() {
         if (e.code === 'KeyW') moveForward = true; if (e.code === 'KeyA') moveLeft = true;
         if (e.code === 'KeyS') moveBackward = true; if (e.code === 'KeyD') moveRight = true;
         if (e.code === 'KeyO') toggleDebugMode();
+        if (e.code === 'KeyN') cycleSanityLevel(-1); // Previous sanity level
+        if (e.code === 'KeyM') cycleSanityLevel(1);  // Next sanity level
     });
     document.addEventListener('keyup', (e) => {
         if (e.code === 'KeyW') moveForward = false; if (e.code === 'KeyA') moveLeft = false;
