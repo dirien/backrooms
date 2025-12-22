@@ -10,6 +10,9 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
  */
 
 let scene, camera, renderer, composer, clock;
+let wakeupPass = null;
+let wakeupStartTime = -1;
+const WAKEUP_DURATION = 2.0; // seconds
 let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
 let velocity = new THREE.Vector3();
 let chunks = new Map();
@@ -37,6 +40,7 @@ const CHUNK_SIZE = 24;
 const RENDER_DIST = 2;
 const PRELOAD_DIST = 4; // Larger distance for preloading potentially visible chunks
 const PLAYER_RADIUS = 0.5;
+const PHONE_EXCLUSION_DIST = 4; // No phones within this many chunks from spawn (0,0)
 
 // Frustum for visibility checks
 let frustum = new THREE.Frustum();
@@ -86,6 +90,76 @@ const WALL_SHADER = {
             vec3 finalColor = texColor.rgb * mix(1.0 - aoStrength, 1.0, ao);
 
             gl_FragColor = vec4(finalColor, texColor.a);
+        }
+    `
+};
+
+// Wake-up eye opening shader effect
+const WAKEUP_SHADER = {
+    uniforms: {
+        "tDiffuse": { value: null },
+        "eyeOpen": { value: 0.0 },  // 0 = closed, 1 = fully open
+        "blurAmount": { value: 1.0 },  // 1 = full blur, 0 = no blur
+        "effectOpacity": { value: 1.0 }  // 1 = full effect, 0 = no effect (passthrough)
+    },
+    vertexShader: `
+        varying vec2 vUv;
+        void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: `
+        uniform sampler2D tDiffuse;
+        uniform float eyeOpen;
+        uniform float blurAmount;
+        uniform float effectOpacity;
+        varying vec2 vUv;
+
+        void main() {
+            vec2 uv = vUv;
+            vec2 center = vec2(0.5, 0.5);
+            vec2 centered = uv - center;
+
+            // Get original color for blending at the end
+            vec4 original = texture2D(tDiffuse, uv);
+
+            // Blur effect (simple box blur approximation)
+            vec4 col = vec4(0.0);
+            float blurSize = blurAmount * 0.02;
+            col += texture2D(tDiffuse, uv + vec2(-blurSize, -blurSize)) * 0.0625;
+            col += texture2D(tDiffuse, uv + vec2(0.0, -blurSize)) * 0.125;
+            col += texture2D(tDiffuse, uv + vec2(blurSize, -blurSize)) * 0.0625;
+            col += texture2D(tDiffuse, uv + vec2(-blurSize, 0.0)) * 0.125;
+            col += texture2D(tDiffuse, uv) * 0.25;
+            col += texture2D(tDiffuse, uv + vec2(blurSize, 0.0)) * 0.125;
+            col += texture2D(tDiffuse, uv + vec2(-blurSize, blurSize)) * 0.0625;
+            col += texture2D(tDiffuse, uv + vec2(0.0, blurSize)) * 0.125;
+            col += texture2D(tDiffuse, uv + vec2(blurSize, blurSize)) * 0.0625;
+
+            // Eye shape - elliptical opening
+            // Aspect ratio correction for eye shape (wider than tall)
+            float aspectRatio = 2.5;
+            vec2 eyeCoord = vec2(centered.x, centered.y * aspectRatio);
+            float eyeDist = length(eyeCoord);
+
+            // Create eyelid curve - eye opening grows with eyeOpen
+            // The visible area is an ellipse that grows from center
+            float eyeRadius = eyeOpen * 0.8;  // Max radius when fully open
+
+            // Smooth edge for eyelids
+            float edgeSoftness = 0.05 + (1.0 - eyeOpen) * 0.1;
+            float eyeMask = smoothstep(eyeRadius, eyeRadius - edgeSoftness, eyeDist);
+
+            // Darken everything outside the eye opening
+            col.rgb = mix(vec3(0.0), col.rgb, eyeMask);
+
+            // Add slight darkening at the edges of the eye opening (eyelid shadow)
+            float shadowMask = smoothstep(eyeRadius - edgeSoftness * 2.0, eyeRadius, eyeDist);
+            col.rgb *= mix(1.0, 0.7, shadowMask * (1.0 - eyeOpen * 0.5));
+
+            // Blend between effect and original based on effectOpacity
+            gl_FragColor = mix(original, col, effectOpacity);
         }
     `
 };
@@ -757,7 +831,11 @@ function generateChunk(cx, cz) {
     }
 
     // Add wall phones very rarely to walls (0.5% chance - very rare!)
-    if (wallPhoneModel) {
+    // Phones never spawn within PHONE_EXCLUSION_DIST chunks of the start point (0,0)
+    const chunkDistFromSpawn = Math.max(Math.abs(cx), Math.abs(cz));
+    const phonesAllowed = chunkDistFromSpawn >= PHONE_EXCLUSION_DIST;
+
+    if (wallPhoneModel && phonesAllowed) {
         for (const wallInfo of wallsInChunk) {
             // Use different seed offset to avoid correlation with outlet placement
             const phoneSeed = seed + wallInfo.center.x * 3000 + wallInfo.center.z * 4000 + 12345;
@@ -1192,14 +1270,65 @@ function animate() {
 
     composer.passes[2].uniforms.time.value = clock.elapsedTime;
     composer.passes[2].uniforms.sanity.value = playerSanity / 100;
+
+    // Update wake-up eye opening animation
+    if (wakeupPass && wakeupStartTime >= 0) {
+        const elapsed = (performance.now() - wakeupStartTime) / 1000;
+        const progress = Math.min(elapsed / WAKEUP_DURATION, 1.0);
+
+        // Easing function with blink effect
+        // Creates stuttering open-close-open pattern like struggling to wake up
+        let eyeOpen;
+        if (progress < 0.12) {
+            // First blink attempt - opens slightly then closes
+            eyeOpen = Math.sin(progress / 0.12 * Math.PI) * 0.2;
+        } else if (progress < 0.25) {
+            // Second attempt - opens more
+            const p = (progress - 0.12) / 0.13;
+            eyeOpen = Math.sin(p * Math.PI) * 0.35;
+        } else if (progress < 0.45) {
+            // Third attempt - opens wider then closes a bit
+            const p = (progress - 0.25) / 0.2;
+            eyeOpen = 0.25 + Math.sin(p * Math.PI) * 0.35;
+        } else if (progress < 0.85) {
+            // Final opening - smooth ease out to fully open
+            const p = (progress - 0.45) / 0.4;
+            const eased = 1 - Math.pow(1 - p, 3); // cubic ease out
+            eyeOpen = 0.5 + eased * 0.5;
+        } else {
+            // Fade out phase - keep eye fully open, fade the effect
+            eyeOpen = 1.0;
+        }
+
+        // Calculate effect opacity for smooth fade out at the end
+        let effectOpacity = 1.0;
+        if (progress > 0.7) {
+            effectOpacity = 1.0 - ((progress - 0.7) / 0.3);
+        }
+
+        wakeupPass.uniforms.eyeOpen.value = eyeOpen;
+        wakeupPass.uniforms.blurAmount.value = Math.max(0, (1.0 - progress * 1.5)) * effectOpacity;
+        wakeupPass.uniforms.effectOpacity.value = effectOpacity;
+
+        // Disable the pass once animation is complete
+        if (progress >= 1.0) {
+            wakeupPass.enabled = false;
+            wakeupStartTime = -1;
+        }
+    }
+
     composer.render();
 }
 
 async function initGame() {
     document.getElementById('start-screen').style.display = 'none';
-    document.getElementById('ui-overlay').style.display = 'block';
     document.getElementById('fps-counter').style.display = 'block';
     document.getElementById('crosshair').style.display = 'block';
+
+    // Show UI after wake-up animation completes
+    setTimeout(() => {
+        document.getElementById('ui-overlay').style.display = 'block';
+    }, WAKEUP_DURATION * 1000);
 
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
@@ -1238,6 +1367,16 @@ async function initGame() {
 
     const effect = new ShaderPass(POST_SHADER);
     composer.addPass(effect);
+
+    // Wake-up eye opening effect (added last so it's on top)
+    wakeupPass = new ShaderPass(WAKEUP_SHADER);
+    wakeupPass.uniforms.eyeOpen.value = 0.0;
+    wakeupPass.uniforms.blurAmount.value = 1.0;
+    wakeupPass.uniforms.effectOpacity.value = 1.0;
+    composer.addPass(wakeupPass);
+
+    // Start the wake-up animation
+    wakeupStartTime = performance.now();
 
     clock = new THREE.Clock();
     
