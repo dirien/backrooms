@@ -3,6 +3,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 /**
  * BACKROOMS - Level 0: The Lobby
@@ -16,6 +17,8 @@ let walls = [];
 let lightPanels = [];
 let playerSanity = 100;
 let isStarted = false;
+let debugMode = false;
+let debugNormals = [];
 
 let fpsFrames = 0;
 let fpsPrevTime = performance.now();
@@ -24,6 +27,8 @@ let fpsPrevTime = performance.now();
 let wallMat, floorMat, ceilingMat;
 let wallGeoV, wallGeoH, floorGeo, lightPanelGeo, lightPanelMat;
 let infiniteCeiling;
+let outletModel = null;
+let gltfLoader;
 
 const CHUNK_SIZE = 24;
 const RENDER_DIST = 2;
@@ -246,6 +251,55 @@ function createGlobalResources() {
 
     // Floor geometry for per-chunk floor tiles
     floorGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE);
+
+    // Initialize GLTF loader
+    gltfLoader = new GLTFLoader();
+}
+
+// Load outlet model - returns a promise
+function loadOutletModel() {
+    return new Promise((resolve) => {
+        gltfLoader.load('/models/wall_outlet_american.glb', (gltf) => {
+            outletModel = gltf.scene;
+            outletModel.scale.set(0.5, 0.5, 0.5);
+            // Rotate model 90 degrees on X so it lies flat against walls (face points -Z)
+            //outletModel.rotation.y = Math.PI/2;  // Face points -Z
+            // Make it white
+            outletModel.traverse((child) => {
+                if (child.isMesh) {
+                    child.material = new THREE.MeshStandardMaterial({
+                        color: 0xffffff,
+                        roughness: 0.8,
+                        metalness: 0.1
+                    });
+                }
+            });
+            console.log('Wall outlet model loaded');
+            resolve();
+        }, undefined, (error) => {
+            console.warn('Failed to load outlet model:', error);
+            resolve(); // Resolve anyway so game can continue without outlets
+        });
+    });
+}
+
+// Create a line showing a normal vector from a point
+function createNormalLine(origin, direction, material) {
+    const points = [
+        origin.clone(),
+        origin.clone().add(direction.clone().multiplyScalar(1.5))
+    ];
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    return new THREE.Line(geometry, material);
+}
+
+// Toggle debug mode visibility
+function toggleDebugMode() {
+    debugMode = !debugMode;
+    debugNormals.forEach(line => {
+        line.visible = debugMode;
+    });
+    console.log('Debug mode:', debugMode ? 'ON' : 'OFF');
 }
 
 // Create fixed ceiling only (floor is per-chunk)
@@ -309,6 +363,113 @@ function generateChunk(cx, cz) {
             panel.updateMatrix();
             group.add(panel);
             lightPanels.push(panel);
+        }
+    }
+
+    // Create debug normal lines for walls (visible when debug mode is on)
+    const normalLineMat = new THREE.LineBasicMaterial({ color: 0xff0000 });
+
+    // Store wall info for outlet placement later
+    const wallsInChunk = [];
+
+    // Re-iterate to create debug normals and track walls
+    for (let i = 0; i <= gSize; i++) {
+        const pos = -CHUNK_SIZE / 2 + i * cellSize;
+        for (let j = 0; j < gSize; j++) {
+            // wallGeoV: thin in X (0.3), tall in Y (3), long in Z (~8)
+            // Normals point +X and -X
+            if (rnd(seed + i * 7 + j) > 0.65) {
+                const wallZ = -CHUNK_SIZE / 2 + j * cellSize + cellSize / 2;
+                const wallCenter = new THREE.Vector3(pos, 1.5, wallZ);
+
+                // +X normal (right side of wall)
+                const normalPlusX = createNormalLine(wallCenter, new THREE.Vector3(1, 0, 0), normalLineMat);
+                normalPlusX.visible = false;
+                group.add(normalPlusX);
+                debugNormals.push(normalPlusX);
+
+                // -X normal (left side of wall)
+                const normalMinusX = createNormalLine(wallCenter, new THREE.Vector3(-1, 0, 0), normalLineMat);
+                normalMinusX.visible = false;
+                group.add(normalMinusX);
+                debugNormals.push(normalMinusX);
+
+                // Store wall info
+                wallsInChunk.push({ center: wallCenter, type: 'V', normals: [new THREE.Vector3(1, 0, 0), new THREE.Vector3(-1, 0, 0)] });
+            }
+
+            // wallGeoH: long in X (~8), tall in Y (3), thin in Z (0.3)
+            // Normals point +Z and -Z
+            if (rnd(seed + i * 13 + j) > 0.65) {
+                const wallX = -CHUNK_SIZE / 2 + j * cellSize + cellSize / 2;
+                const wallCenter = new THREE.Vector3(wallX, 1.5, pos);
+
+                // +Z normal (front side of wall)
+                const normalPlusZ = createNormalLine(wallCenter, new THREE.Vector3(0, 0, 1), normalLineMat);
+                normalPlusZ.visible = false;
+                group.add(normalPlusZ);
+                debugNormals.push(normalPlusZ);
+
+                // -Z normal (back side of wall)
+                const normalMinusZ = createNormalLine(wallCenter, new THREE.Vector3(0, 0, -1), normalLineMat);
+                normalMinusZ.visible = false;
+                group.add(normalMinusZ);
+                debugNormals.push(normalMinusZ);
+
+                // Store wall info
+                wallsInChunk.push({ center: wallCenter, type: 'H', normals: [new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, -1)] });
+            }
+        }
+    }
+
+    // Add outlets randomly to walls (max one per wall)
+    if (outletModel) {
+        for (const wallInfo of wallsInChunk) {
+            // 5% chance to add an outlet to this wall
+            const wallSeed = seed + wallInfo.center.x * 1000 + wallInfo.center.z * 2000;
+            if (rnd(wallSeed) > 0.05) continue;
+
+            // Pick one side of the wall only
+            const normalIndex = rnd(wallSeed + 1) > 0.5 ? 0 : 1;
+            const normal = wallInfo.normals[normalIndex];
+
+            const outlet = outletModel.clone();
+
+            // Position outlet at fixed height from ground
+            const outletHeight = 0.2;
+
+            // Offset along wall length
+            let offsetX = 0, offsetZ = 0;
+            if (wallInfo.type === 'V') {
+                offsetZ = (rnd(wallSeed + 3) - 0.5) * 6;
+            } else {
+                offsetX = (rnd(wallSeed + 3) - 0.5) * 6;
+            }
+
+            outlet.position.set(
+                wallInfo.center.x + offsetX + normal.x * 0.16,
+                outletHeight,
+                wallInfo.center.z + offsetZ + normal.z * 0.16
+            );
+
+            // Rotate so red axis (X) aligns with wall normal, green axis (Y) stays up
+            // Default: red=+X, green=+Y, blue=+Z
+            // Just rotate around Y axis to point red axis in direction of normal
+            if (normal.x > 0.5) {
+                // Normal +X: red already points +X, no rotation needed
+                outlet.rotation.y = 0;
+            } else if (normal.x < -0.5) {
+                // Normal -X: rotate 180° around Y
+                outlet.rotation.y = Math.PI;
+            } else if (normal.z > 0.5) {
+                // Normal +Z: rotate -90° around Y (red points to +Z)
+                outlet.rotation.y = -Math.PI / 2;
+            } else {
+                // Normal -Z: rotate +90° around Y (red points to -Z)
+                outlet.rotation.y = Math.PI / 2;
+            }
+
+            group.add(outlet);
         }
     }
 
@@ -527,7 +688,7 @@ function animate() {
     composer.render();
 }
 
-function initGame() {
+async function initGame() {
     document.getElementById('start-screen').style.display = 'none';
     document.getElementById('ui-overlay').style.display = 'block';
     document.getElementById('fps-counter').style.display = 'block';
@@ -536,6 +697,9 @@ function initGame() {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
     createGlobalResources();
+
+    // Load outlet model before generating chunks
+    await loadOutletModel();
 
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x050503);
@@ -574,6 +738,7 @@ function initGame() {
     document.addEventListener('keydown', (e) => {
         if (e.code === 'KeyW') moveForward = true; if (e.code === 'KeyA') moveLeft = true;
         if (e.code === 'KeyS') moveBackward = true; if (e.code === 'KeyD') moveRight = true;
+        if (e.code === 'KeyO') toggleDebugMode();
     });
     document.addEventListener('keyup', (e) => {
         if (e.code === 'KeyW') moveForward = false; if (e.code === 'KeyA') moveLeft = false;
