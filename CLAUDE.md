@@ -26,6 +26,7 @@ npm run preview  # Preview production build
 **Main game logic** (`src/main.js`):
 - **Rendering**: Three.js with EffectComposer for post-processing (UnrealBloomPass for light panel glow, vignette, film grain, sanity-based distortion via custom GLSL shaders)
 - **World Generation**: Chunk-based infinite terrain using deterministic seeded randomness. Chunks are 24x24 units with frustum-based culling. Nearby chunks (RENDER_DIST = 2) are always loaded, while potentially visible chunks are preloaded up to PRELOAD_DIST = 4 to prevent pop-in
+- **Maze Algorithm**: Grid-based wall placement that guarantees connectivity - every cell has at least 2 open sides (no dead ends), maximum 2 walls per cell (keeps space open), and chunk boundaries always have open passages in the middle to ensure inter-chunk traversal
 - **Collision**: AABB box collision against wall meshes stored in global `walls` array
 - **Lighting**: Ambient lighting with bloom effect on rectangular fluorescent light panels. Light panel proximity affects audio volume.
 - **Audio**: Web Audio API with MP3 sound files - looping fluorescent light hum (volume increases near light panels), random distant footsteps, and door close sounds
