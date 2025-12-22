@@ -32,7 +32,12 @@ let gltfLoader;
 
 const CHUNK_SIZE = 24;
 const RENDER_DIST = 2;
+const PRELOAD_DIST = 4; // Larger distance for preloading potentially visible chunks
 const PLAYER_RADIUS = 0.5;
+
+// Frustum for visibility checks
+let frustum = new THREE.Frustum();
+let frustumMatrix = new THREE.Matrix4();
 
 let audioCtx;
 
@@ -599,16 +604,70 @@ function handleCollision(target) {
     }
 }
 
+// Check if a chunk could potentially be visible
+// Uses a bounding box for the chunk and checks against the camera frustum
+function isChunkPotentiallyVisible(cx, cz) {
+    const chunkCenterX = cx * CHUNK_SIZE;
+    const chunkCenterZ = cz * CHUNK_SIZE;
+
+    // Create bounding box for the chunk (full height from floor to ceiling)
+    const halfSize = CHUNK_SIZE / 2;
+    const chunkBox = new THREE.Box3(
+        new THREE.Vector3(chunkCenterX - halfSize, 0, chunkCenterZ - halfSize),
+        new THREE.Vector3(chunkCenterX + halfSize, 3, chunkCenterZ + halfSize)
+    );
+
+    return frustum.intersectsBox(chunkBox);
+}
+
+// Check if chunk is within immediate proximity (always render regardless of view direction)
+function isChunkNearby(cx, cz, playerChunkX, playerChunkZ) {
+    const dx = Math.abs(cx - playerChunkX);
+    const dz = Math.abs(cz - playerChunkZ);
+    return dx <= RENDER_DIST && dz <= RENDER_DIST;
+}
+
+// Check if chunk is within preload distance (load but may not always render)
+function isChunkInPreloadRange(cx, cz, playerChunkX, playerChunkZ) {
+    const dx = Math.abs(cx - playerChunkX);
+    const dz = Math.abs(cz - playerChunkZ);
+    return dx <= PRELOAD_DIST && dz <= PRELOAD_DIST;
+}
+
 function updateChunks() {
     const px = Math.floor(camera.position.x / CHUNK_SIZE);
     const pz = Math.floor(camera.position.z / CHUNK_SIZE);
+
+    // Update the frustum for visibility checks
+    frustumMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    frustum.setFromProjectionMatrix(frustumMatrix);
+
     let activeKeys = new Set();
-    for (let x = px - RENDER_DIST; x <= px + RENDER_DIST; x++) {
-        for (let z = pz - RENDER_DIST; z <= pz + RENDER_DIST; z++) {
-            const k = `${x},${z}`; activeKeys.add(k);
-            if (!chunks.has(k)) chunks.set(k, generateChunk(x, z));
+
+    // First pass: load all chunks within preload distance
+    // This ensures chunks are ready before they become visible
+    for (let x = px - PRELOAD_DIST; x <= px + PRELOAD_DIST; x++) {
+        for (let z = pz - PRELOAD_DIST; z <= pz + PRELOAD_DIST; z++) {
+            const k = `${x},${z}`;
+
+            // Determine if this chunk should be loaded/kept
+            const isNearby = isChunkNearby(x, z, px, pz);
+            const isPotentiallyVisible = isChunkPotentiallyVisible(x, z);
+            const inPreloadRange = isChunkInPreloadRange(x, z, px, pz);
+
+            // Load chunk if:
+            // 1. It's within immediate render distance (always load nearby chunks)
+            // 2. It's potentially visible AND within preload range
+            if (isNearby || (isPotentiallyVisible && inPreloadRange)) {
+                activeKeys.add(k);
+                if (!chunks.has(k)) {
+                    chunks.set(k, generateChunk(x, z));
+                }
+            }
         }
     }
+
+    // Second pass: unload chunks that are no longer needed
     for (const [key, obj] of chunks.entries()) {
         if (!activeKeys.has(key)) {
             scene.remove(obj);

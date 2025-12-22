@@ -25,12 +25,12 @@ npm run preview  # Preview production build
 
 **Main game logic** (`src/main.js`):
 - **Rendering**: Three.js with EffectComposer for post-processing (UnrealBloomPass for light panel glow, vignette, film grain, sanity-based distortion via custom GLSL shaders)
-- **World Generation**: Chunk-based infinite terrain using deterministic seeded randomness. Chunks are 24x24 units, loaded/unloaded based on player proximity (RENDER_DIST = 2 chunks)
+- **World Generation**: Chunk-based infinite terrain using deterministic seeded randomness. Chunks are 24x24 units with frustum-based culling. Nearby chunks (RENDER_DIST = 2) are always loaded, while potentially visible chunks are preloaded up to PRELOAD_DIST = 4 to prevent pop-in
 - **Collision**: AABB box collision against wall meshes stored in global `walls` array
 - **Lighting**: Ambient lighting with bloom effect on rectangular fluorescent light panels. Light panel proximity affects audio volume.
 - **Audio**: Web Audio API with MP3 sound files - looping fluorescent light hum (volume increases near light panels), random distant footsteps, and door close sounds
 
-**Key globals**: `scene`, `camera`, `renderer`, `composer`, `chunks` (Map), `walls` (array), `lightPanels` (array), `playerSanity`
+**Key globals**: `scene`, `camera`, `renderer`, `composer`, `chunks` (Map), `walls` (array), `lightPanels` (array), `playerSanity`, `frustum`, `frustumMatrix`
 
 **Audio files** (`public/sounds/`):
 - `light-hum.mp3`: Looping fluorescent light buzz
