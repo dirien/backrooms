@@ -22,7 +22,8 @@ let fpsPrevTime = performance.now();
 
 // Shared Resources
 let wallMat, floorMat, ceilingMat;
-let wallGeoV, wallGeoH, floorGeo, ceilingGeo, lightPanelGeo, lightPanelMat;
+let wallGeoV, wallGeoH, floorGeo, lightPanelGeo, lightPanelMat;
+let infiniteCeiling;
 
 const CHUNK_SIZE = 24;
 const RENDER_DIST = 2;
@@ -119,6 +120,85 @@ function createWallGeometry(width, height, depth) {
     return geo;
 }
 
+// Procedural carpet shader - creates fiber texture pattern
+const CARPET_SHADER = {
+    uniforms: {
+        "baseColor": { value: new THREE.Color(0xa9a865) },  // Yellow-green base
+        "fiberScale": { value: 80.0 },  // Density of carpet fibers
+        "fiberIntensity": { value: 0.15 }  // How visible the fibers are
+    },
+    vertexShader: `
+        varying vec2 vUv;
+        varying vec3 vWorldPos;
+        void main() {
+            vUv = uv;
+            vec4 worldPos = modelMatrix * vec4(position, 1.0);
+            vWorldPos = worldPos.xyz;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: `
+        uniform vec3 baseColor;
+        uniform float fiberScale;
+        uniform float fiberIntensity;
+        varying vec2 vUv;
+        varying vec3 vWorldPos;
+
+        // Hash functions for procedural noise
+        float hash(vec2 p) {
+            return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+        }
+
+        float hash2(vec2 p) {
+            return fract(sin(dot(p, vec2(269.5, 183.3))) * 43758.5453);
+        }
+
+        // Value noise
+        float noise(vec2 p) {
+            vec2 i = floor(p);
+            vec2 f = fract(p);
+            f = f * f * (3.0 - 2.0 * f);
+            float a = hash(i);
+            float b = hash(i + vec2(1.0, 0.0));
+            float c = hash(i + vec2(0.0, 1.0));
+            float d = hash(i + vec2(1.0, 1.0));
+            return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+        }
+
+        void main() {
+            // Use world position for seamless tiling across chunks
+            vec2 carpetUv = vWorldPos.xz * fiberScale;
+
+            // Create carpet fiber pattern - multiple layers of noise
+            float fiber1 = noise(carpetUv);
+            float fiber2 = noise(carpetUv * 2.3 + 17.0);
+            float fiber3 = noise(carpetUv * 4.7 + 31.0);
+
+            // Combine for carpet texture
+            float fibers = fiber1 * 0.5 + fiber2 * 0.3 + fiber3 * 0.2;
+
+            // Add slight color variation to simulate different fiber directions
+            float colorVar = noise(carpetUv * 0.5) * 0.08;
+
+            // Apply fiber darkness/lightness variation
+            vec3 carpetColor = baseColor;
+            carpetColor *= 1.0 + (fibers - 0.5) * fiberIntensity;
+            carpetColor *= 1.0 + (colorVar - 0.04);
+
+            gl_FragColor = vec4(carpetColor, 1.0);
+        }
+    `
+};
+
+// Load ceiling tile texture from image file
+function loadCeilingTexture(textureLoader) {
+    const ceilTex = textureLoader.load('/graphics/ceiling-tile.png');
+    ceilTex.wrapS = ceilTex.wrapT = THREE.RepeatWrapping;
+    // The image shows a 2x2 grid of tiles, so we scale accordingly
+    // Each tile in the image represents one ceiling panel
+    return ceilTex;
+}
+
 function createGlobalResources() {
     // WALL TEXTURE - Load from file
     const textureLoader = new THREE.TextureLoader();
@@ -126,59 +206,33 @@ function createGlobalResources() {
     wallTex.wrapS = wallTex.wrapT = THREE.RepeatWrapping;
     wallTex.repeat.set(1, 1);
 
-    // SEAMLESS CARPET - using backrooms palette (yellow)
-    const carpetCanvas = document.createElement('canvas');
-    carpetCanvas.width = carpetCanvas.height = 1024;
-    const cCtx = carpetCanvas.getContext('2d');
-    cCtx.fillStyle = '#cfcca2';
-    cCtx.fillRect(0, 0, 1024, 1024);
-
-    for (let i = 0; i < 150; i++) {
-        const x = Math.random() * 1024;
-        const y = Math.random() * 1024;
-        const r = 100 + Math.random() * 250;
-        const g = cCtx.createRadialGradient(x, y, 0, x, y, r);
-        g.addColorStop(0, `rgba(100, 90, 50, ${0.05 + Math.random() * 0.05})`);
-        g.addColorStop(1, 'rgba(30, 20, 10, 0)');
-        cCtx.fillStyle = g;
-        cCtx.beginPath(); cCtx.arc(x, y, r, 0, Math.PI * 2); cCtx.fill();
-    }
-
-    const imgData = cCtx.getImageData(0, 0, 1024, 1024);
-    const data = imgData.data;
-    for (let i = 0; i < data.length; i += 4) {
-        const n = (Math.random() - 0.5) * 20;
-        data[i] += n; data[i + 1] += n; data[i + 2] += n;
-    }
-    cCtx.putImageData(imgData, 0, 0);
-    const carpetTex = new THREE.CanvasTexture(carpetCanvas);
-    carpetTex.wrapS = carpetTex.wrapT = THREE.RepeatWrapping;
-
-    // CEILING - using backrooms palette
-    const ceilCanvas = document.createElement('canvas');
-    ceilCanvas.width = ceilCanvas.height = 512;
-    const ceCtx = ceilCanvas.getContext('2d');
-    ceCtx.fillStyle = '#d7d3a2';
-    ceCtx.fillRect(0, 0, 512, 512);
-    ceCtx.strokeStyle = 'rgba(0,0,0,0.1)';
-    ceCtx.lineWidth = 1;
-    for (let i = 0; i <= 512; i += 64) {
-        ceCtx.beginPath(); ceCtx.moveTo(i, 0); ceCtx.lineTo(i, 512); ceCtx.stroke();
-        ceCtx.beginPath(); ceCtx.moveTo(0, i); ceCtx.lineTo(512, i); ceCtx.stroke();
-    }
-    const ceilTex = new THREE.CanvasTexture(ceilCanvas);
-    ceilTex.wrapS = ceilTex.wrapT = THREE.RepeatWrapping;
-    ceilTex.repeat.set(12, 12);
+    // Load ceiling tile texture from image
+    const ceilTex = loadCeilingTexture(textureLoader);
+    const planeSize = CHUNK_SIZE * (RENDER_DIST * 2 + 2);
+    const tileWorldSize = 1.5;
+    ceilTex.repeat.set(planeSize / tileWorldSize, planeSize / tileWorldSize);
 
     wallMat = new THREE.MeshStandardMaterial({ map: wallTex, roughness: 1.0, metalness: 0, color: 0xffffff });
-    floorMat = new THREE.MeshStandardMaterial({ map: carpetTex, roughness: 1.0, metalness: 0, color: 0xffffff });
-    ceilingMat = new THREE.MeshStandardMaterial({ map: ceilTex, roughness: 1.0, metalness: 0, color: 0xaaaaaa });
+
+    // Floor with procedural carpet shader
+    floorMat = new THREE.ShaderMaterial({
+        uniforms: THREE.UniformsUtils.clone(CARPET_SHADER.uniforms),
+        vertexShader: CARPET_SHADER.vertexShader,
+        fragmentShader: CARPET_SHADER.fragmentShader,
+        side: THREE.FrontSide
+    });
+    // Ceiling tiles - whiter look
+    ceilingMat = new THREE.MeshStandardMaterial({
+        map: ceilTex,
+        roughness: 0.95,
+        metalness: 0,
+        color: 0xbbbbbb,  // Whiter ceiling
+        side: THREE.DoubleSide  // Render both sides - simpler than fighting rotations
+    });
     lightPanelMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
 
     const gSize = 3;
     const cellSize = CHUNK_SIZE / gSize;
-    floorGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE);
-    ceilingGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE);
     lightPanelGeo = new THREE.PlaneGeometry(cellSize * 0.4, cellSize * 0.2);
 
     // Create wall geometries with proper UV mapping
@@ -190,6 +244,22 @@ function createGlobalResources() {
     wallGeoV = createWallGeometry(wallThickness, wallHeight, wallLengthV);
     wallGeoH = createWallGeometry(wallLengthH, wallHeight, wallThickness);
 
+    // Floor geometry for per-chunk floor tiles
+    floorGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE);
+}
+
+// Create fixed ceiling only (floor is per-chunk)
+function createInfiniteCeiling() {
+    const planeSize = CHUNK_SIZE * (RENDER_DIST * 2 + 2);  // 144 units (24 * 6)
+
+    // Ceiling - fixed at origin
+    const ceilingGeo = new THREE.PlaneGeometry(planeSize, planeSize);
+    infiniteCeiling = new THREE.Mesh(ceilingGeo, ceilingMat);
+    infiniteCeiling.rotation.x = -Math.PI / 2;
+    // Position ceiling slightly above light panels (which are at 2.99) to avoid z-fighting
+    infiniteCeiling.position.set(0, 3.01, 0);  // Fixed at origin
+
+    scene.add(infiniteCeiling);
 }
 
 function generateChunk(cx, cz) {
@@ -197,19 +267,15 @@ function generateChunk(cx, cz) {
     const seed = (cx * 12345) ^ (cz * 54321);
     const rnd = (s) => (Math.abs(Math.sin(s) * 10000) % 1);
 
+    // Floor tile for this chunk
     const floor = new THREE.Mesh(floorGeo, floorMat);
     floor.rotation.x = -Math.PI / 2;
+    floor.position.set(0, 0, 0);
     floor.matrixAutoUpdate = false;
     floor.updateMatrix();
     group.add(floor);
 
-    const ceiling = new THREE.Mesh(ceilingGeo, ceilingMat);
-    ceiling.rotation.x = Math.PI / 2;
-    ceiling.position.y = 3;
-    ceiling.matrixAutoUpdate = false;
-    ceiling.updateMatrix();
-    group.add(ceiling);
-
+    // Walls and lights
     const gSize = 3;
     const cellSize = CHUNK_SIZE / gSize;
     for (let i = 0; i <= gSize; i++) {
@@ -501,6 +567,9 @@ function initGame() {
     // Even ambient lighting - the main light source for backrooms look
     // Ambient light using backrooms palette (pale golden)
     scene.add(new THREE.AmbientLight(0xd7d3a2, 4.0));
+
+    // Create infinite ceiling (floor is per-chunk)
+    createInfiniteCeiling();
 
     document.addEventListener('keydown', (e) => {
         if (e.code === 'KeyW') moveForward = true; if (e.code === 'KeyA') moveLeft = true;
