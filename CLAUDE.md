@@ -36,6 +36,7 @@ npm run preview  # Preview production build
 - `light-hum.mp3`: Looping fluorescent light buzz
 - `footsteps.mp3`: Random distant footsteps
 - `door-close.mp3`: Random distant door closing
+- `phone-ring.mp3`: Phone ringing sound, loops when player is within 2-3 chunks of a wall phone (volume increases with proximity)
 
 **Graphics** (`public/graphics/`):
 - `wallpaper.png`: Wall texture using Backrooms color palette
@@ -44,6 +45,7 @@ npm run preview  # Preview production build
 
 **3D Models** (`public/models/`):
 - `wall_outlet_american.glb`: American-style wall outlet, randomly placed on walls (5% chance per wall)
+- `corded_public_phone_-_low_poly.glb`: Corded public phone, very rarely placed on walls (0.5% chance per wall)
 
 **Floor/Ceiling System**:
 - Floor: Per-chunk procedural carpet shader with yellow-green base color and fiber texture pattern

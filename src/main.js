@@ -15,6 +15,7 @@ let velocity = new THREE.Vector3();
 let chunks = new Map();
 let walls = [];
 let lightPanels = [];
+let phonePositions = []; // Track phone positions for audio
 let playerSanity = 100;
 let isStarted = false;
 let debugMode = false;
@@ -28,6 +29,7 @@ let fpsPrevTime = performance.now();
 let wallMat, floorMat, ceilingMat;
 let wallGeoV, wallGeoH, floorGeo, ceilingGeo, lightPanelGeo, lightPanelMat;
 let outletModel = null;
+let wallPhoneModel = null;
 let gltfLoader;
 
 const CHUNK_SIZE = 24;
@@ -315,24 +317,69 @@ function loadOutletModel() {
     return new Promise((resolve) => {
         gltfLoader.load('/models/wall_outlet_american.glb', (gltf) => {
             outletModel = gltf.scene;
-            outletModel.scale.set(0.5, 0.5, 0.5);
-            // Rotate model 90 degrees on X so it lies flat against walls (face points -Z)
-            //outletModel.rotation.y = Math.PI/2;  // Face points -Z
-            // Make it white
+            outletModel.scale.set(0.75, 0.75, 0.75);
+
+            // Apply bright white material to all meshes, preserving texture if present
             outletModel.traverse((child) => {
                 if (child.isMesh) {
-                    child.material = new THREE.MeshStandardMaterial({
-                        color: 0xffffff,
-                        roughness: 0.8,
-                        metalness: 0.1
-                    });
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+                    
+                    if (child.material.map) {
+                        // Preserve texture
+                        child.material.metalness = 0;
+                        child.material.roughness = 0.4;
+                        child.material.color = new THREE.Color(0xffffff);
+                        child.material.emissive = new THREE.Color(0x222222); // Subtle glow to show texture
+                        child.material.needsUpdate = true;
+                    } else {
+                        // No texture, use bright white material
+                        child.material = new THREE.MeshStandardMaterial({
+                            color: 0xffffff,
+                            roughness: 0.4,
+                            metalness: 0.0,
+                            emissive: 0xbbbbbb
+                        });
+                    }
                 }
             });
+
             console.log('Wall outlet model loaded');
             resolve();
         }, undefined, (error) => {
             console.warn('Failed to load outlet model:', error);
             resolve(); // Resolve anyway so game can continue without outlets
+        });
+    });
+}
+
+// Load wall phone model - returns a promise
+function loadWallPhoneModel() {
+    return new Promise((resolve) => {
+        gltfLoader.load('/models/corded_public_phone_-_low_poly.glb', (gltf) => {
+            wallPhoneModel = gltf.scene;
+            wallPhoneModel.scale.set(0.05, 0.05, 0.05);
+
+            // Enable shadows and fix materials
+            wallPhoneModel.traverse((child) => {
+                if (child.isMesh) {
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+                    // Preserve texture if it exists, but reset PBR values
+                    if (child.material.map) {
+                        child.material.metalness = 0;
+                        child.material.roughness = 0.5;
+                        child.material.emissive = new THREE.Color(0x222222); // Subtle glow
+                        child.material.needsUpdate = true;
+                    }
+                }
+            });
+
+            console.log('Wall phone model loaded');
+            resolve();
+        }, undefined, (error) => {
+            console.warn('Failed to load wall phone model:', error);
+            resolve(); // Resolve anyway so game can continue without phones
         });
     });
 }
@@ -557,24 +604,92 @@ function generateChunk(cx, cz) {
                 wallInfo.center.z + offsetZ + normal.z * 0.16
             );
 
-            // Rotate so red axis (X) aligns with wall normal, green axis (Y) stays up
+            // Rotate so Blue axis (Z) aligns with wall normal, Green axis (Y) stays up
             // Default: red=+X, green=+Y, blue=+Z
-            // Just rotate around Y axis to point red axis in direction of normal
             if (normal.x > 0.5) {
-                // Normal +X: red already points +X, no rotation needed
-                outlet.rotation.y = 0;
-            } else if (normal.x < -0.5) {
-                // Normal -X: rotate 180° around Y
-                outlet.rotation.y = Math.PI;
-            } else if (normal.z > 0.5) {
-                // Normal +Z: rotate -90° around Y (red points to +Z)
-                outlet.rotation.y = -Math.PI / 2;
-            } else {
-                // Normal -Z: rotate +90° around Y (red points to -Z)
+                // Normal +X: rotate +90° around Y (Blue points to +X)
                 outlet.rotation.y = Math.PI / 2;
+            } else if (normal.x < -0.5) {
+                // Normal -X: rotate -90° around Y (Blue points to -X)
+                outlet.rotation.y = -Math.PI / 2;
+            } else if (normal.z > 0.5) {
+                // Normal +Z: no rotation needed (Blue points to +Z)
+                outlet.rotation.y = 0;
+            } else {
+                // Normal -Z: rotate 180° around Y (Blue points to -Z)
+                outlet.rotation.y = Math.PI;
             }
 
+            // Add axes helper for debugging
+            const axes = new THREE.AxesHelper(0.5);
+            axes.visible = debugMode;
+            outlet.add(axes);
+            debugNormals.push(axes);
+
             group.add(outlet);
+        }
+    }
+
+    // Add wall phones very rarely to walls (0.5% chance - very rare!)
+    if (wallPhoneModel) {
+        for (const wallInfo of wallsInChunk) {
+            // Use different seed offset to avoid correlation with outlet placement
+            const phoneSeed = seed + wallInfo.center.x * 3000 + wallInfo.center.z * 4000 + 12345;
+            // 0.5% chance - very rare
+            if (rnd(phoneSeed) > 0.005) continue;
+
+            // Pick one side of the wall only
+            const normalIndex = rnd(phoneSeed + 1) > 0.5 ? 0 : 1;
+            const normal = wallInfo.normals[normalIndex];
+
+            const phone = wallPhoneModel.clone();
+
+            // Position phone at eye level on wall
+            const phoneHeight = 1.7;
+
+            // Offset along wall length
+            let offsetX = 0, offsetZ = 0;
+            if (wallInfo.type === 'V') {
+                offsetZ = (rnd(phoneSeed + 3) - 0.5) * 5;
+            } else {
+                offsetX = (rnd(phoneSeed + 3) - 0.5) * 5;
+            }
+
+            const phoneX = wallInfo.center.x + offsetX + normal.x * 0.15;
+            const phoneZ = wallInfo.center.z + offsetZ + normal.z * 0.15;
+
+            phone.position.set(phoneX, phoneHeight, phoneZ);
+
+            // Rotate phone: first stand upright (Z rotation), then align with wall normal (Y rotation)
+            phone.rotation.z = -Math.PI / 2; // Stand upright
+
+            // Rotate Y to align green axis with wall normal direction
+            if (normal.x > 0.5) {
+                // Normal +X
+                phone.rotation.y = 0;
+            } else if (normal.x < -0.5) {
+                // Normal -X
+                phone.rotation.y = Math.PI;
+            } else if (normal.z > 0.5) {
+                // Normal +Z
+                phone.rotation.y = -Math.PI / 2;
+            } else {
+                // Normal -Z
+                phone.rotation.y = Math.PI / 2;
+            }
+
+            group.add(phone);
+
+            // Track phone world position for audio (chunk offset + local position)
+            const worldPhonePos = new THREE.Vector3(
+                cx * CHUNK_SIZE + phoneX,
+                phoneHeight,
+                cz * CHUNK_SIZE + phoneZ
+            );
+            phonePositions.push(worldPhonePos);
+            // Store reference to remove when chunk unloads
+            if (!group.userData.phonePositions) group.userData.phonePositions = [];
+            group.userData.phonePositions.push(worldPhonePos);
         }
     }
 
@@ -673,6 +788,10 @@ function updateChunks() {
             scene.remove(obj);
             walls = walls.filter(w => !obj.children.includes(w));
             lightPanels = lightPanels.filter(p => !obj.children.includes(p));
+            // Clean up phone positions from this chunk
+            if (obj.userData.phonePositions) {
+                phonePositions = phonePositions.filter(p => !obj.userData.phonePositions.includes(p));
+            }
             // Clean up chunk border
             if (obj.userData.border) {
                 scene.remove(obj.userData.border);
@@ -691,25 +810,37 @@ let humBuffer = null;
 let humGainNode = null;
 let humSource = null;
 
+// Phone ringing audio
+let phoneRingBuffer = null;
+let phoneRingSource = null;
+let phoneRingGainNode = null;
+const PHONE_AUDIO_MIN_DIST = CHUNK_SIZE * 2; // Start hearing at 2 chunks away
+const PHONE_AUDIO_MAX_DIST = CHUNK_SIZE * 3; // Maximum hearing distance (3 chunks)
+
 async function loadAmbientSounds() {
     try {
-        const [footstepsResponse, doorResponse, humResponse] = await Promise.all([
+        const [footstepsResponse, doorResponse, humResponse, phoneRingResponse] = await Promise.all([
             fetch('/sounds/footsteps.mp3'),
             fetch('/sounds/door-close.mp3'),
-            fetch('/sounds/light-hum.mp3')
+            fetch('/sounds/light-hum.mp3'),
+            fetch('/sounds/phone-ring.mp3')
         ]);
-        const [footstepsArrayBuffer, doorArrayBuffer, humArrayBuffer] = await Promise.all([
+        const [footstepsArrayBuffer, doorArrayBuffer, humArrayBuffer, phoneRingArrayBuffer] = await Promise.all([
             footstepsResponse.arrayBuffer(),
             doorResponse.arrayBuffer(),
-            humResponse.arrayBuffer()
+            humResponse.arrayBuffer(),
+            phoneRingResponse.arrayBuffer()
         ]);
         footstepsBuffer = await audioCtx.decodeAudioData(footstepsArrayBuffer);
         doorCloseBuffer = await audioCtx.decodeAudioData(doorArrayBuffer);
         humBuffer = await audioCtx.decodeAudioData(humArrayBuffer);
+        phoneRingBuffer = await audioCtx.decodeAudioData(phoneRingArrayBuffer);
         console.log('Ambient sounds loaded successfully');
 
         // Start the looping hum sound
         startHumSound();
+        // Start the phone ringing sound (will only play when near phones)
+        startPhoneRingSound();
     } catch (e) {
         console.warn('Failed to load ambient sounds:', e);
     }
@@ -728,6 +859,59 @@ function startHumSound() {
     humSource.connect(humGainNode);
     humGainNode.connect(audioCtx.destination);
     humSource.start();
+}
+
+function startPhoneRingSound() {
+    if (!phoneRingBuffer || !audioCtx) return;
+
+    phoneRingSource = audioCtx.createBufferSource();
+    phoneRingSource.buffer = phoneRingBuffer;
+    phoneRingSource.loop = true;
+
+    phoneRingGainNode = audioCtx.createGain();
+    phoneRingGainNode.gain.value = 0; // Start silent, will increase when near phones
+
+    phoneRingSource.connect(phoneRingGainNode);
+    phoneRingGainNode.connect(audioCtx.destination);
+    phoneRingSource.start();
+}
+
+function updatePhoneRingVolume() {
+    if (!phoneRingGainNode || !camera || phonePositions.length === 0) {
+        // No phones nearby, ensure silence
+        if (phoneRingGainNode) {
+            phoneRingGainNode.gain.setTargetAtTime(0, audioCtx.currentTime, 0.1);
+        }
+        return;
+    }
+
+    // Find distance to nearest phone
+    let minDist = Infinity;
+    const playerPos = camera.position;
+
+    for (const phonePos of phonePositions) {
+        const dist = playerPos.distanceTo(phonePos);
+        if (dist < minDist) minDist = dist;
+    }
+
+    // Only play sound if within range (2-3 chunks away)
+    // Volume increases as you get closer
+    if (minDist > PHONE_AUDIO_MAX_DIST) {
+        // Too far, no sound
+        phoneRingGainNode.gain.setTargetAtTime(0, audioCtx.currentTime, 0.1);
+    } else if (minDist < PHONE_AUDIO_MIN_DIST) {
+        // Very close - full volume (clamped)
+        const proximity = 1 - (minDist / PHONE_AUDIO_MIN_DIST);
+        const volume = 0.5 + proximity * 0.5; // 0.5 to 1.0 when very close
+        phoneRingGainNode.gain.setTargetAtTime(volume, audioCtx.currentTime, 0.1);
+    } else {
+        // Within audible range - interpolate volume
+        const range = PHONE_AUDIO_MAX_DIST - PHONE_AUDIO_MIN_DIST;
+        const distFromMin = minDist - PHONE_AUDIO_MIN_DIST;
+        const proximity = 1 - (distFromMin / range);
+        const volume = proximity * 0.5; // 0 to 0.5 based on distance
+        phoneRingGainNode.gain.setTargetAtTime(volume, audioCtx.currentTime, 0.1);
+    }
 }
 
 function updateHumVolume() {
@@ -853,6 +1037,7 @@ function animate() {
 
     updateChunks();
     updateHumVolume();
+    updatePhoneRingVolume();
 
     composer.passes[2].uniforms.time.value = clock.elapsedTime;
     composer.passes[2].uniforms.sanity.value = playerSanity / 100;
@@ -869,8 +1054,11 @@ async function initGame() {
 
     createGlobalResources();
 
-    // Load outlet model before generating chunks
-    await loadOutletModel();
+    // Load models before generating chunks
+    await Promise.all([
+        loadOutletModel(),
+        loadWallPhoneModel()
+    ]);
 
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x050503);
