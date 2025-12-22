@@ -54,6 +54,16 @@ npm run preview  # Preview production build
 **Debug Mode** (press `O` key):
 - Toggles visibility of wall normal debug lines (red)
 - Toggles chunk border visualization (transparent red walls at chunk boundaries)
+- Press `N`/`M` to cycle through sanity levels (100%, 80%, 50%, 30%, 10%, 0%) for testing distortion effects
+
+**Sanity System**:
+- Sanity drains over time while the player is moving
+- UI displays a styled sanity bar with percentage, color changes at low levels
+- Progressive visual distortion effects at different sanity thresholds:
+  - **80%**: Subtle wave distortion
+  - **50%**: Chromatic aberration, stronger waves, green tint
+  - **30%**: Tunnel vision, pulsing, spiral distortion, color cycling, double vision
+  - **10%**: Screen shake, reality fracturing, kaleidoscope effect, color inversion flashes, scan lines
 
 **Shared resources**: Geometries and materials are created once in `createGlobalResources()` and reused across all chunks for performance.
 
