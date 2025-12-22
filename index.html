@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Backrooms - Level 0</title>
+    <style>
+        :root { --yellow: #d1c28c; --dim-yellow: #a69a6d; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', Courier, monospace; color: var(--yellow); }
+
+        #ui-overlay {
+            position: fixed;
+            top: 20px; left: 20px;
+            pointer-events: none;
+            z-index: 10;
+            display: none;
+            text-shadow: 2px 2px 2px #000;
+        }
+        #sanity-container { width: 240px; height: 4px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.5); margin-top: 10px; }
+        #sanity-bar { width: 100%; height: 100%; background: var(--yellow); transition: width 0.3s; }
+
+        #fps-counter {
+            position: fixed;
+            bottom: 20px; right: 20px;
+            color: var(--yellow);
+            font-size: 12px;
+            opacity: 0.5;
+            pointer-events: none;
+            z-index: 10;
+            display: none;
+            text-align: right;
+        }
+
+        #start-screen {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle at center, #1a1a10 0%, #000 100%);
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            z-index: 100;
+        }
+        .header { text-align: center; margin-bottom: 20px; }
+        .header h1 { font-size: 3rem; letter-spacing: 15px; margin: 0; font-weight: 100; }
+        .header p { opacity: 0.5; letter-spacing: 2px; font-size: 0.8rem; }
+
+        button {
+            background: transparent;
+            border: 1px solid var(--yellow);
+            color: var(--yellow);
+            padding: 15px 50px;
+            font-size: 1.2rem;
+            cursor: pointer;
+            transition: 0.3s;
+            letter-spacing: 5px;
+        }
+        button:hover {
+            background: var(--yellow);
+            color: #000;
+        }
+
+        #crosshair {
+            position: fixed;
+            top: 50%; left: 50%;
+            width: 4px; height: 4px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="start-screen">
+        <div class="header">
+            <h1>BACKROOMS</h1>
+            <p>LEVEL 0: THE LOBBY</p>
+        </div>
+        <button onclick="initGame()">NOCLIP</button>
+    </div>
+
+    <div id="ui-overlay">
+        <div id="timer">T+ <span id="timestamp">00:00:00</span></div>
+        <div id="sanity-container"><div id="sanity-bar"></div></div>
+    </div>
+
+    <div id="fps-counter">FPS: <span id="fps-val">0</span></div>
+    <div id="crosshair"></div>
+
+    <script type="module" src="/src/main.js"></script>
+</body>
+</html>
