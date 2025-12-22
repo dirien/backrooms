@@ -143,6 +143,16 @@
             color: #000;
         }
 
+        .controls-hint {
+            margin: 20px 0;
+            opacity: 0.5;
+            font-size: 0.9rem;
+            letter-spacing: 2px;
+        }
+        .controls-hint p {
+            margin: 0;
+        }
+
         #crosshair {
             position: fixed;
             top: 50%; left: 50%;
@@ -151,6 +161,87 @@
             border-radius: 50%;
             transform: translate(-50%, -50%);
             display: none;
+        }
+
+        /* Mobile touch controls */
+        #touch-controls {
+            display: none;
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 200px;
+            pointer-events: none;
+            z-index: 20;
+        }
+        #touch-controls.active {
+            display: block;
+        }
+        .touch-zone {
+            position: absolute;
+            bottom: 20px;
+            pointer-events: auto;
+            touch-action: none;
+        }
+        #joystick-zone {
+            left: 20px;
+            width: 150px;
+            height: 150px;
+        }
+        #joystick-base {
+            position: absolute;
+            width: 120px;
+            height: 120px;
+            border: 2px solid rgba(209, 194, 140, 0.3);
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.3);
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+        }
+        #joystick-stick {
+            position: absolute;
+            width: 50px;
+            height: 50px;
+            background: rgba(209, 194, 140, 0.5);
+            border: 2px solid rgba(209, 194, 140, 0.6);
+            border-radius: 50%;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            transition: background 0.1s;
+        }
+        #joystick-stick.active {
+            background: rgba(209, 194, 140, 0.8);
+        }
+        #look-zone {
+            right: 0;
+            left: 180px;
+            width: auto;
+            height: 100vh;
+            bottom: 0;
+            top: 0;
+        }
+        #look-indicator {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            font-size: 10px;
+            letter-spacing: 2px;
+            opacity: 0.4;
+            pointer-events: none;
+        }
+
+        /* Mobile-specific adjustments */
+        @media (max-width: 768px) {
+            .header h1 { font-size: 2.5rem; letter-spacing: 10px; }
+            .header p { font-size: 0.8rem; }
+            .objective { padding: 0 20px; }
+            .objective p { font-size: 0.9rem; line-height: 1.8; }
+            button { padding: 12px 30px; font-size: 1rem; }
+            #ui-overlay { top: 10px; left: 10px; }
+            #sanity-container { width: 200px; }
+            #fps-counter { bottom: 10px; right: 10px; font-size: 10px; }
         }
 
     </style>
@@ -169,7 +260,19 @@
                 Move fast. The deeper you go, the closer you get to escape... or to being <span class="highlight">forever lost</span>.
             </p>
         </div>
+        <div id="controls-hint" class="controls-hint">
+            <p id="desktop-controls">WASD to move | Mouse to look</p>
+            <p id="mobile-controls" style="display: none;">Left joystick to move | Drag right side to look</p>
+        </div>
         <button onclick="initGame()">ENTER THE BACKROOMS</button>
+        <script>
+            // Show appropriate control hints
+            const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+            if (isTouchDevice) {
+                document.getElementById('desktop-controls').style.display = 'none';
+                document.getElementById('mobile-controls').style.display = 'block';
+            }
+        </script>
     </div>
 
     <div id="ui-overlay">
@@ -183,6 +286,17 @@
 
     <div id="fps-counter">FPS: <span id="fps-val">0</span></div>
     <div id="crosshair"></div>
+
+    <!-- Mobile touch controls -->
+    <div id="touch-controls">
+        <div id="joystick-zone" class="touch-zone">
+            <div id="joystick-base">
+                <div id="joystick-stick"></div>
+            </div>
+        </div>
+        <div id="look-zone" class="touch-zone"></div>
+        <div id="look-indicator">DRAG TO LOOK</div>
+    </div>
 
     <script type="module" src="/src/main.js"></script>
 </body>
