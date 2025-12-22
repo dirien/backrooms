@@ -29,6 +29,14 @@ let debugSanityOverride = -1; // -1 means no override, 0-4 are the sanity levels
 let fpsFrames = 0;
 let fpsPrevTime = performance.now();
 
+// Mobile touch controls
+let isMobile = false;
+let joystickInput = { x: 0, y: 0 };
+let joystickActive = false;
+let joystickTouchId = null;
+let lookTouchId = null;
+let lastLookPos = { x: 0, y: 0 };
+
 // Shared Resources
 let wallMat, floorMat, ceilingMat;
 let wallGeoV, wallGeoH, floorGeo, ceilingGeo, lightPanelGeo, lightPanelMat;
@@ -574,6 +582,143 @@ function createNormalLine(origin, direction, material) {
 }
 
 // Toggle debug mode visibility
+// Detect mobile/touch devices
+function detectMobile() {
+    return (
+        'ontouchstart' in window ||
+        navigator.maxTouchPoints > 0 ||
+        /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+    );
+}
+
+// Initialize touch controls for mobile
+function initTouchControls() {
+    const touchControls = document.getElementById('touch-controls');
+    const joystickZone = document.getElementById('joystick-zone');
+    const joystickStick = document.getElementById('joystick-stick');
+    const joystickBase = document.getElementById('joystick-base');
+    const lookZone = document.getElementById('look-zone');
+
+    if (!touchControls) return;
+
+    touchControls.classList.add('active');
+
+    const joystickRect = joystickBase.getBoundingClientRect();
+    const joystickCenterX = joystickRect.left + joystickRect.width / 2;
+    const joystickCenterY = joystickRect.top + joystickRect.height / 2;
+    const maxJoystickDist = joystickRect.width / 2 - 25; // Account for stick size
+
+    // Joystick touch handlers
+    joystickZone.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        if (joystickTouchId !== null) return;
+
+        const touch = e.changedTouches[0];
+        joystickTouchId = touch.identifier;
+        joystickActive = true;
+        joystickStick.classList.add('active');
+        updateJoystick(touch.clientX, touch.clientY);
+    }, { passive: false });
+
+    joystickZone.addEventListener('touchmove', (e) => {
+        e.preventDefault();
+        for (const touch of e.changedTouches) {
+            if (touch.identifier === joystickTouchId) {
+                updateJoystick(touch.clientX, touch.clientY);
+                break;
+            }
+        }
+    }, { passive: false });
+
+    joystickZone.addEventListener('touchend', (e) => {
+        for (const touch of e.changedTouches) {
+            if (touch.identifier === joystickTouchId) {
+                joystickTouchId = null;
+                joystickActive = false;
+                joystickInput = { x: 0, y: 0 };
+                joystickStick.classList.remove('active');
+                joystickStick.style.transform = 'translate(-50%, -50%)';
+                break;
+            }
+        }
+    });
+
+    joystickZone.addEventListener('touchcancel', (e) => {
+        joystickTouchId = null;
+        joystickActive = false;
+        joystickInput = { x: 0, y: 0 };
+        joystickStick.classList.remove('active');
+        joystickStick.style.transform = 'translate(-50%, -50%)';
+    });
+
+    function updateJoystick(touchX, touchY) {
+        const rect = joystickBase.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+
+        let dx = touchX - centerX;
+        let dy = touchY - centerY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        // Clamp to max distance
+        if (dist > maxJoystickDist) {
+            dx = (dx / dist) * maxJoystickDist;
+            dy = (dy / dist) * maxJoystickDist;
+        }
+
+        // Update stick position
+        joystickStick.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+
+        // Normalize input (-1 to 1)
+        joystickInput.x = dx / maxJoystickDist;
+        joystickInput.y = dy / maxJoystickDist;
+    }
+
+    // Look zone touch handlers (right side of screen for camera rotation)
+    lookZone.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        if (lookTouchId !== null) return;
+
+        const touch = e.changedTouches[0];
+        lookTouchId = touch.identifier;
+        lastLookPos = { x: touch.clientX, y: touch.clientY };
+    }, { passive: false });
+
+    lookZone.addEventListener('touchmove', (e) => {
+        e.preventDefault();
+        for (const touch of e.changedTouches) {
+            if (touch.identifier === lookTouchId) {
+                const dx = touch.clientX - lastLookPos.x;
+                const dy = touch.clientY - lastLookPos.y;
+
+                // Apply camera rotation (sensitivity adjusted for touch)
+                if (camera) {
+                    camera.rotation.order = 'YXZ';
+                    camera.rotation.y -= dx * 0.003;
+                    camera.rotation.x -= dy * 0.003;
+                    camera.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, camera.rotation.x));
+                }
+
+                lastLookPos = { x: touch.clientX, y: touch.clientY };
+                break;
+            }
+        }
+    }, { passive: false });
+
+    lookZone.addEventListener('touchend', (e) => {
+        for (const touch of e.changedTouches) {
+            if (touch.identifier === lookTouchId) {
+                lookTouchId = null;
+                break;
+            }
+        }
+    });
+
+    lookZone.addEventListener('touchcancel', () => {
+        lookTouchId = null;
+    });
+}
+
 function toggleDebugMode() {
     debugMode = !debugMode;
     debugNormals.forEach(line => {
@@ -1218,14 +1363,26 @@ function animate() {
         fpsPrevTime = currentTime;
     }
 
-    if (document.pointerLockElement === renderer.domElement) {
+    // Check if we should process movement (pointer lock on desktop, or mobile touch)
+    const canMove = document.pointerLockElement === renderer.domElement || isMobile;
+
+    if (canMove) {
         const speed = 4.0; const friction = 12.0;
         velocity.x -= velocity.x * friction * delta;
         velocity.z -= velocity.z * friction * delta;
 
         const input = new THREE.Vector3();
+
+        // Handle keyboard input (desktop)
         if (moveForward) input.z -= 1; if (moveBackward) input.z += 1;
         if (moveLeft) input.x -= 1; if (moveRight) input.x += 1;
+
+        // Handle joystick input (mobile) - add to keyboard input
+        if (isMobile && joystickActive) {
+            input.x += joystickInput.x;
+            input.z += joystickInput.y; // Joystick Y maps to forward/backward
+        }
+
         input.normalize();
 
         const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion); fwd.y = 0; fwd.normalize();
@@ -1239,7 +1396,19 @@ function animate() {
 
         // Only drain sanity if not in debug override mode
         if (debugSanityOverride === -1) {
-            playerSanity -= delta * 0.5; // Much faster sanity drain
+            // Sanity drain rate increases at insanity thresholds
+            // Base drain: 0.15/sec, increases as sanity drops
+            let drainRate = 0.15;
+            if (playerSanity <= 10) {
+                drainRate = 0.6; // 4x faster at critical insanity
+            } else if (playerSanity <= 30) {
+                drainRate = 0.4; // ~2.7x faster at severe insanity
+            } else if (playerSanity <= 50) {
+                drainRate = 0.25; // ~1.7x faster at moderate insanity
+            } else if (playerSanity <= 80) {
+                drainRate = 0.2; // ~1.3x faster at mild insanity
+            }
+            playerSanity -= delta * drainRate;
             playerSanity = Math.max(0, playerSanity);
         }
 
@@ -1325,11 +1494,22 @@ function animate() {
 async function initGame() {
     document.getElementById('start-screen').style.display = 'none';
     document.getElementById('fps-counter').style.display = 'block';
-    document.getElementById('crosshair').style.display = 'block';
+
+    // Detect mobile device
+    isMobile = detectMobile();
+
+    // Show crosshair only on desktop (mobile uses touch controls)
+    if (!isMobile) {
+        document.getElementById('crosshair').style.display = 'block';
+    }
 
     // Show UI after wake-up animation completes
     setTimeout(() => {
         document.getElementById('ui-overlay').style.display = 'block';
+        // Initialize touch controls after UI is shown (mobile only)
+        if (isMobile) {
+            initTouchControls();
+        }
     }, WAKEUP_DURATION * 1000);
 
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1407,10 +1587,17 @@ async function initGame() {
     });
 
     const handleInteraction = () => {
-        renderer.domElement.requestPointerLock();
+        // Only request pointer lock on desktop (mobile uses touch controls)
+        if (!isMobile) {
+            renderer.domElement.requestPointerLock();
+        }
         if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
     };
     document.addEventListener('mousedown', handleInteraction);
+    // Also handle touch for audio context on mobile
+    document.addEventListener('touchstart', () => {
+        if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    }, { once: true });
 
     document.addEventListener('mousemove', (e) => {
         if (document.pointerLockElement === renderer.domElement) {

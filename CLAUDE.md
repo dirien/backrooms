@@ -69,12 +69,20 @@ npm run preview  # Preview production build
 
 **Sanity System**:
 - Sanity drains over time while the player is moving
+- Drain rate accelerates at lower sanity thresholds (0.15/sec base, up to 0.6/sec at critical levels)
 - UI displays a styled sanity bar with percentage, color changes at low levels
 - Progressive visual distortion effects at different sanity thresholds:
-  - **80%**: Subtle wave distortion
-  - **50%**: Chromatic aberration, stronger waves, green tint
-  - **30%**: Tunnel vision, pulsing, spiral distortion, color cycling, double vision
-  - **10%**: Screen shake, reality fracturing, kaleidoscope effect, color inversion flashes, scan lines
+  - **80%**: Subtle wave distortion (drain: 0.2/sec)
+  - **50%**: Chromatic aberration, stronger waves, green tint (drain: 0.25/sec)
+  - **30%**: Tunnel vision, pulsing, spiral distortion, color cycling, double vision (drain: 0.4/sec)
+  - **10%**: Screen shake, reality fracturing, kaleidoscope effect, color inversion flashes, scan lines (drain: 0.6/sec)
+
+**Mobile/Touch Support**:
+- Automatic detection of touch devices (iOS, Android)
+- Virtual joystick (bottom-left) for movement control
+- Touch-drag zone (rest of screen) for camera rotation
+- Responsive UI adjustments for smaller screens
+- Audio context handling for iOS Safari autoplay restrictions
 
 **Shared resources**: Geometries and materials are created once in `createGlobalResources()` and reused across all chunks for performance.
 
