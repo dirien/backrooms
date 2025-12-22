@@ -797,6 +797,131 @@ function createChunkBorder(cx, cz) {
     return group;
 }
 
+// Seeded random number generator for deterministic chunk generation
+function seededRandom(seed) {
+    let s = seed;
+    return function() {
+        s = (s * 1103515245 + 12345) & 0x7fffffff;
+        return s / 0x7fffffff;
+    };
+}
+
+// Generate wall placement that guarantees connectivity (no dead ends)
+// Uses a grid-based approach where each cell must have at least 2 open sides
+function generateWallGrid(cx, cz, gSize) {
+    const seed = ((cx * 73856093) ^ (cz * 19349663)) >>> 0;
+    const rng = seededRandom(seed);
+
+    // Wall grids: [row][col] for horizontal walls (blocking N-S movement)
+    // and vertical walls (blocking E-W movement)
+    // gSize+1 rows/cols of walls surround gSize cells
+
+    // Initialize potential walls
+    const hWalls = []; // Horizontal walls (block Z movement)
+    const vWalls = []; // Vertical walls (block X movement)
+
+    for (let i = 0; i <= gSize; i++) {
+        hWalls[i] = [];
+        vWalls[i] = [];
+        for (let j = 0; j < gSize; j++) {
+            // Start with random wall placement (55% chance)
+            hWalls[i][j] = rng() > 0.45;
+            vWalls[i][j] = rng() > 0.45;
+        }
+    }
+
+    // Remove walls on chunk boundaries to ensure inter-chunk connectivity
+    // This guarantees players can always move between chunks
+    for (let j = 0; j < gSize; j++) {
+        // Always open at least one path on each edge
+        // Use deterministic selection based on chunk coordinates
+        const edgeSeed = seededRandom(seed + j * 1000);
+
+        // North edge (i = gSize) - always open middle passage
+        if (j === Math.floor(gSize / 2)) hWalls[gSize][j] = false;
+        // South edge (i = 0) - always open middle passage
+        if (j === Math.floor(gSize / 2)) hWalls[0][j] = false;
+        // East edge (i = gSize for vWalls) - always open middle passage
+        if (j === Math.floor(gSize / 2)) vWalls[gSize][j] = false;
+        // West edge (i = 0 for vWalls) - always open middle passage
+        if (j === Math.floor(gSize / 2)) vWalls[0][j] = false;
+    }
+
+    // Ensure each interior cell has at least 2 open sides (no dead ends)
+    // A cell at (x, z) is bounded by:
+    // - North: hWalls[z+1][x]
+    // - South: hWalls[z][x]
+    // - East: vWalls[x+1][z]
+    // - West: vWalls[x][z]
+
+    for (let z = 0; z < gSize; z++) {
+        for (let x = 0; x < gSize; x++) {
+            let openSides = 0;
+            const sides = [
+                { type: 'h', i: z + 1, j: x },  // North
+                { type: 'h', i: z, j: x },      // South
+                { type: 'v', i: x + 1, j: z },  // East
+                { type: 'v', i: x, j: z }       // West
+            ];
+
+            // Count open sides
+            for (const side of sides) {
+                const walls = side.type === 'h' ? hWalls : vWalls;
+                if (!walls[side.i][side.j]) openSides++;
+            }
+
+            // If fewer than 2 open sides, remove walls until we have at least 2
+            // Prefer removing interior walls over edge walls
+            while (openSides < 2) {
+                // Shuffle sides for random selection
+                const shuffled = [...sides].sort(() => rng() - 0.5);
+
+                for (const side of shuffled) {
+                    const walls = side.type === 'h' ? hWalls : vWalls;
+                    if (walls[side.i][side.j]) {
+                        walls[side.i][side.j] = false;
+                        openSides++;
+                        if (openSides >= 2) break;
+                    }
+                }
+            }
+        }
+    }
+
+    // Additional pass: ensure no cell has more than 2 walls (keeps it feeling open)
+    for (let z = 0; z < gSize; z++) {
+        for (let x = 0; x < gSize; x++) {
+            let wallCount = 0;
+            const sides = [
+                { type: 'h', i: z + 1, j: x },
+                { type: 'h', i: z, j: x },
+                { type: 'v', i: x + 1, j: z },
+                { type: 'v', i: x, j: z }
+            ];
+
+            for (const side of sides) {
+                const walls = side.type === 'h' ? hWalls : vWalls;
+                if (walls[side.i][side.j]) wallCount++;
+            }
+
+            // Remove excess walls if more than 2
+            while (wallCount > 2) {
+                const shuffled = [...sides].sort(() => rng() - 0.5);
+                for (const side of shuffled) {
+                    const walls = side.type === 'h' ? hWalls : vWalls;
+                    if (walls[side.i][side.j]) {
+                        walls[side.i][side.j] = false;
+                        wallCount--;
+                        if (wallCount <= 2) break;
+                    }
+                }
+            }
+        }
+    }
+
+    return { hWalls, vWalls };
+}
+
 function generateChunk(cx, cz) {
     const group = new THREE.Group();
     const seed = (cx * 12345) ^ (cz * 54321);
@@ -819,24 +944,35 @@ function generateChunk(cx, cz) {
     ceiling.updateMatrix();
     group.add(ceiling);
 
-    // Walls and lights
+    // Generate wall placement grid that guarantees connectivity
     const gSize = 3;
     const cellSize = CHUNK_SIZE / gSize;
+    const { hWalls, vWalls } = generateWallGrid(cx, cz, gSize);
+
+    // Place walls based on the generated grid
+    // Vertical walls (block X movement) - placed along X grid lines
     for (let i = 0; i <= gSize; i++) {
-        const pos = -CHUNK_SIZE / 2 + i * cellSize;
+        const posX = -CHUNK_SIZE / 2 + i * cellSize;
         for (let j = 0; j < gSize; j++) {
-            if (rnd(seed + i * 7 + j) > 0.65) {
+            if (vWalls[i][j]) {
                 const wall = new THREE.Mesh(wallGeoV, wallMat);
-                wall.position.set(pos, 1.5, -CHUNK_SIZE / 2 + j * cellSize + cellSize / 2);
+                wall.position.set(posX, 1.5, -CHUNK_SIZE / 2 + j * cellSize + cellSize / 2);
                 wall.matrixAutoUpdate = false;
                 wall.updateMatrix();
-                wall.castShadow = true;    // Walls cast shadows
-                wall.receiveShadow = true; // Walls receive shadows
+                wall.castShadow = true;
+                wall.receiveShadow = true;
                 group.add(wall); walls.push(wall);
             }
-            if (rnd(seed + i * 13 + j) > 0.65) {
+        }
+    }
+
+    // Horizontal walls (block Z movement) - placed along Z grid lines
+    for (let i = 0; i <= gSize; i++) {
+        const posZ = -CHUNK_SIZE / 2 + i * cellSize;
+        for (let j = 0; j < gSize; j++) {
+            if (hWalls[i][j]) {
                 const wall = new THREE.Mesh(wallGeoH, wallMat);
-                wall.position.set(-CHUNK_SIZE / 2 + j * cellSize + cellSize / 2, 1.5, pos);
+                wall.position.set(-CHUNK_SIZE / 2 + j * cellSize + cellSize / 2, 1.5, posZ);
                 wall.matrixAutoUpdate = false;
                 wall.updateMatrix();
                 wall.castShadow = true;
@@ -869,15 +1005,14 @@ function generateChunk(cx, cz) {
     // Store wall info for outlet placement later
     const wallsInChunk = [];
 
-    // Re-iterate to create debug normals and track walls
+    // Create debug normals and track walls based on the generated wall grid
+    // Vertical walls (vWalls)
     for (let i = 0; i <= gSize; i++) {
-        const pos = -CHUNK_SIZE / 2 + i * cellSize;
+        const posX = -CHUNK_SIZE / 2 + i * cellSize;
         for (let j = 0; j < gSize; j++) {
-            // wallGeoV: thin in X (0.3), tall in Y (3), long in Z (~8)
-            // Normals point +X and -X
-            if (rnd(seed + i * 7 + j) > 0.65) {
+            if (vWalls[i][j]) {
                 const wallZ = -CHUNK_SIZE / 2 + j * cellSize + cellSize / 2;
-                const wallCenter = new THREE.Vector3(pos, 1.5, wallZ);
+                const wallCenter = new THREE.Vector3(posX, 1.5, wallZ);
 
                 // +X normal (right side of wall)
                 const normalPlusX = createNormalLine(wallCenter, new THREE.Vector3(1, 0, 0), normalLineMat);
@@ -894,12 +1029,16 @@ function generateChunk(cx, cz) {
                 // Store wall info
                 wallsInChunk.push({ center: wallCenter, type: 'V', normals: [new THREE.Vector3(1, 0, 0), new THREE.Vector3(-1, 0, 0)] });
             }
+        }
+    }
 
-            // wallGeoH: long in X (~8), tall in Y (3), thin in Z (0.3)
-            // Normals point +Z and -Z
-            if (rnd(seed + i * 13 + j) > 0.65) {
+    // Horizontal walls (hWalls)
+    for (let i = 0; i <= gSize; i++) {
+        const posZ = -CHUNK_SIZE / 2 + i * cellSize;
+        for (let j = 0; j < gSize; j++) {
+            if (hWalls[i][j]) {
                 const wallX = -CHUNK_SIZE / 2 + j * cellSize + cellSize / 2;
-                const wallCenter = new THREE.Vector3(wallX, 1.5, pos);
+                const wallCenter = new THREE.Vector3(wallX, 1.5, posZ);
 
                 // +Z normal (front side of wall)
                 const normalPlusZ = createNormalLine(wallCenter, new THREE.Vector3(0, 0, 1), normalLineMat);
