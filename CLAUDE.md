@@ -24,13 +24,21 @@ npm run preview  # Preview production build
 **Entry point**: `index.html` loads `src/main.js` as an ES module.
 
 **Main game logic** (`src/main.js`):
-- **Rendering**: Three.js with EffectComposer for post-processing (vignette, film grain, sanity-based distortion via custom GLSL shaders)
+- **Rendering**: Three.js with EffectComposer for post-processing (UnrealBloomPass for light panel glow, vignette, film grain, sanity-based distortion via custom GLSL shaders)
 - **World Generation**: Chunk-based infinite terrain using deterministic seeded randomness. Chunks are 24x24 units, loaded/unloaded based on player proximity (RENDER_DIST = 2 chunks)
 - **Collision**: AABB box collision against wall meshes stored in global `walls` array
-- **Lighting**: Pool of 32 point lights (MAX_ACTIVE_LIGHTS) dynamically positioned at nearest light anchors to player
-- **Audio**: Web Audio API generating procedural sounds - constant 60Hz hum and randomized "phantom slam" events
+- **Lighting**: Ambient lighting with bloom effect on rectangular fluorescent light panels. Light panel proximity affects audio volume.
+- **Audio**: Web Audio API with MP3 sound files - looping fluorescent light hum (volume increases near light panels), random distant footsteps, and door close sounds
 
-**Key globals**: `scene`, `camera`, `renderer`, `composer`, `chunks` (Map), `walls` (array), `lightAnchors` (array), `activeLights` (array), `playerSanity`
+**Key globals**: `scene`, `camera`, `renderer`, `composer`, `chunks` (Map), `walls` (array), `lightPanels` (array), `playerSanity`
+
+**Audio files** (`public/sounds/`):
+- `light-hum.mp3`: Looping fluorescent light buzz
+- `footsteps.mp3`: Random distant footsteps
+- `door-close.mp3`: Random distant door closing
+
+**Graphics** (`public/graphics/`):
+- `wallpaper.png`: Wall texture using Backrooms color palette
 
 **Shared resources**: Geometries and materials are created once in `createGlobalResources()` and reused across all chunks for performance.
 
