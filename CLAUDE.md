@@ -39,6 +39,12 @@ npm run preview  # Preview production build
 
 **Graphics** (`public/graphics/`):
 - `wallpaper.png`: Wall texture using Backrooms color palette
+- `ceiling-tile.png`: Drop ceiling tile texture
+- `carpet.png`: Carpet texture (currently unused - floor uses procedural shader)
+
+**Floor/Ceiling System**:
+- Floor: Per-chunk procedural carpet shader with yellow-green base color and fiber texture pattern
+- Ceiling: Single fixed infinite plane with tiled drop ceiling texture
 
 **Shared resources**: Geometries and materials are created once in `createGlobalResources()` and reused across all chunks for performance.
 
