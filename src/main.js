@@ -10,6 +10,10 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
  */
 
 let scene, camera, renderer, composer, clock;
+let hudScene, hudCamera;
+let sanityBarBg, sanityBarFill, sanityLabelMesh, sanityPercentMesh;
+let sanityLabelCanvas, sanityLabelCtx, sanityLabelTexture;
+let sanityPercentCanvas, sanityPercentCtx, sanityPercentTexture;
 let wakeupPass = null;
 let wakeupStartTime = -1;
 const WAKEUP_DURATION = 2.0; // seconds
@@ -497,6 +501,207 @@ function createGlobalResources() {
 
     // Initialize GLTF loader
     gltfLoader = new GLTFLoader();
+}
+
+// Create HUD scene for sanity bar rendered in Three.js
+function createHUD() {
+    hudScene = new THREE.Scene();
+
+    // Orthographic camera for HUD (screen space coordinates)
+    const aspect = window.innerWidth / window.innerHeight;
+    hudCamera = new THREE.OrthographicCamera(-aspect, aspect, 1, -1, 0.1, 10);
+    hudCamera.position.z = 1;
+
+    // HUD dimensions (in normalized screen space, -1 to 1)
+    const barWidth = 0.5;
+    const barHeight = 0.035;
+    const padding = 0.05;
+
+    // Position in top-left corner
+    const barX = -aspect + padding + barWidth / 2;
+    const barY = 1 - padding - barHeight / 2 - 0.04; // Leave room for label
+
+    // Sanity bar background
+    const bgGeo = new THREE.PlaneGeometry(barWidth + 0.01, barHeight + 0.01);
+    const bgMat = new THREE.MeshBasicMaterial({
+        color: 0x000000,
+        transparent: true,
+        opacity: 0.7
+    });
+    sanityBarBg = new THREE.Mesh(bgGeo, bgMat);
+    sanityBarBg.position.set(barX, barY, 0);
+    hudScene.add(sanityBarBg);
+
+    // Border
+    const borderGeo = new THREE.PlaneGeometry(barWidth + 0.02, barHeight + 0.02);
+    const borderMat = new THREE.MeshBasicMaterial({
+        color: 0xd1c28c,
+        transparent: true,
+        opacity: 0.4
+    });
+    const border = new THREE.Mesh(borderGeo, borderMat);
+    border.position.set(barX, barY, -0.01);
+    hudScene.add(border);
+
+    // Sanity bar fill (will be scaled based on sanity)
+    const fillGeo = new THREE.PlaneGeometry(barWidth, barHeight);
+    const fillMat = new THREE.MeshBasicMaterial({
+        color: 0xd1c28c,
+        transparent: true,
+        opacity: 0.9
+    });
+    sanityBarFill = new THREE.Mesh(fillGeo, fillMat);
+    sanityBarFill.position.set(barX, barY, 0.01);
+    hudScene.add(sanityBarFill);
+
+    // Store original bar properties for updates
+    sanityBarFill.userData.originalWidth = barWidth;
+    sanityBarFill.userData.originalX = barX;
+
+    // Create canvas texture for "SANITY" label
+    sanityLabelCanvas = document.createElement('canvas');
+    sanityLabelCanvas.width = 256;
+    sanityLabelCanvas.height = 64;
+    sanityLabelCtx = sanityLabelCanvas.getContext('2d');
+
+    sanityLabelTexture = new THREE.CanvasTexture(sanityLabelCanvas);
+    sanityLabelTexture.minFilter = THREE.LinearFilter;
+
+    // Draw "SANITY" label
+    sanityLabelCtx.fillStyle = 'rgba(0, 0, 0, 0)';
+    sanityLabelCtx.fillRect(0, 0, 256, 64);
+    sanityLabelCtx.font = '700 28px "Courier New", Courier, monospace';
+    sanityLabelCtx.fillStyle = 'rgba(209, 194, 140, 0.8)';
+    sanityLabelCtx.letterSpacing = '6px';
+    sanityLabelCtx.fillText('S A N I T Y', 10, 40);
+    sanityLabelTexture.needsUpdate = true;
+
+    const labelGeo = new THREE.PlaneGeometry(0.25, 0.06);
+    const labelMat = new THREE.MeshBasicMaterial({
+        map: sanityLabelTexture,
+        transparent: true
+    });
+    sanityLabelMesh = new THREE.Mesh(labelGeo, labelMat);
+    sanityLabelMesh.position.set(barX - barWidth / 2 + 0.125, barY + barHeight / 2 + 0.04, 0.01);
+    hudScene.add(sanityLabelMesh);
+
+    // Create canvas texture for percentage
+    sanityPercentCanvas = document.createElement('canvas');
+    sanityPercentCanvas.width = 128;
+    sanityPercentCanvas.height = 64;
+    sanityPercentCtx = sanityPercentCanvas.getContext('2d');
+
+    sanityPercentTexture = new THREE.CanvasTexture(sanityPercentCanvas);
+    sanityPercentTexture.minFilter = THREE.LinearFilter;
+
+    const percentGeo = new THREE.PlaneGeometry(0.12, 0.05);
+    const percentMat = new THREE.MeshBasicMaterial({
+        map: sanityPercentTexture,
+        transparent: true
+    });
+    sanityPercentMesh = new THREE.Mesh(percentGeo, percentMat);
+    sanityPercentMesh.position.set(barX - barWidth / 2 + 0.06, barY - barHeight / 2 - 0.035, 0.01);
+    hudScene.add(sanityPercentMesh);
+
+    // Initially hidden
+    hudScene.visible = false;
+}
+
+// Update HUD sanity bar
+function updateHUDSanity(sanity) {
+    if (!hudScene) return;
+
+    const percent = sanity / 100;
+    const originalWidth = sanityBarFill.userData.originalWidth;
+    const originalX = sanityBarFill.userData.originalX;
+
+    // Scale bar fill from left side
+    sanityBarFill.scale.x = Math.max(0.001, percent);
+    sanityBarFill.position.x = originalX - (originalWidth / 2) * (1 - percent);
+
+    // Update color based on sanity level
+    let barColor;
+    if (sanity <= 10) {
+        barColor = new THREE.Color(0xff4444);
+    } else if (sanity <= 30) {
+        barColor = new THREE.Color(0xff8844);
+    } else if (sanity <= 50) {
+        barColor = new THREE.Color(0xffcc44);
+    } else {
+        barColor = new THREE.Color(0xd1c28c);
+    }
+    sanityBarFill.material.color = barColor;
+
+    // Update percentage text
+    sanityPercentCtx.clearRect(0, 0, 128, 64);
+
+    let textColor;
+    if (sanity <= 10) {
+        textColor = 'rgba(255, 68, 68, 1)';
+    } else if (sanity <= 30) {
+        textColor = 'rgba(255, 136, 68, 1)';
+    } else if (sanity <= 50) {
+        textColor = 'rgba(255, 204, 68, 1)';
+    } else {
+        textColor = 'rgba(209, 194, 140, 0.9)';
+    }
+
+    sanityPercentCtx.font = '700 32px "Courier New", Courier, monospace';
+    sanityPercentCtx.fillStyle = textColor;
+    sanityPercentCtx.fillText(Math.round(sanity) + '%', 10, 40);
+    sanityPercentTexture.needsUpdate = true;
+
+    // Add pulsing effect at low sanity
+    if (sanity <= 10) {
+        const pulse = Math.sin(Date.now() * 0.01) * 0.3 + 0.7;
+        sanityBarFill.material.opacity = pulse;
+    } else if (sanity <= 30) {
+        const pulse = Math.sin(Date.now() * 0.005) * 0.15 + 0.85;
+        sanityBarFill.material.opacity = pulse;
+    } else {
+        sanityBarFill.material.opacity = 0.9;
+    }
+}
+
+// Update HUD camera on resize
+function updateHUDCamera() {
+    if (!hudCamera) return;
+    const aspect = window.innerWidth / window.innerHeight;
+    hudCamera.left = -aspect;
+    hudCamera.right = aspect;
+    hudCamera.updateProjectionMatrix();
+
+    // Reposition HUD elements for new aspect ratio
+    const barWidth = 0.5;
+    const barHeight = 0.035;
+    const padding = 0.05;
+    const barX = -aspect + padding + barWidth / 2;
+    const barY = 1 - padding - barHeight / 2 - 0.04;
+
+    sanityBarBg.position.x = barX;
+    sanityBarBg.position.y = barY;
+
+    // Find and update border
+    hudScene.children.forEach(child => {
+        if (child !== sanityBarBg && child !== sanityBarFill &&
+            child !== sanityLabelMesh && child !== sanityPercentMesh &&
+            child.geometry && child.geometry.parameters.width > 0.5) {
+            child.position.x = barX;
+            child.position.y = barY;
+        }
+    });
+
+    sanityBarFill.userData.originalX = barX;
+    sanityBarFill.position.y = barY;
+
+    sanityLabelMesh.position.x = barX - barWidth / 2 + 0.125;
+    sanityLabelMesh.position.y = barY + barHeight / 2 + 0.04;
+
+    sanityPercentMesh.position.x = barX - barWidth / 2 + 0.06;
+    sanityPercentMesh.position.y = barY - barHeight / 2 - 0.035;
+
+    // Update fill position based on current sanity
+    updateHUDSanity(playerSanity);
 }
 
 // Load outlet model - returns a promise
@@ -1551,27 +1756,8 @@ function animate() {
             playerSanity = Math.max(0, playerSanity);
         }
 
-        // Update sanity bar
-        const sanityBar = document.getElementById('sanity-bar');
-        const sanityPercent = document.getElementById('sanity-percent');
-        const uiOverlay = document.getElementById('ui-overlay');
-
-        sanityBar.style.width = playerSanity + '%';
-        sanityPercent.innerText = Math.round(playerSanity) + '%';
-
-        // Shift gradient to show more red as sanity drops
-        const gradientPos = 100 - (100 - playerSanity) * 1.5;
-        sanityBar.style.backgroundPosition = Math.max(0, gradientPos) + '% 0';
-
-        // Update CSS classes for visual effects
-        uiOverlay.classList.remove('sanity-warning', 'sanity-low', 'sanity-critical');
-        if (playerSanity <= 10) {
-            uiOverlay.classList.add('sanity-critical');
-        } else if (playerSanity <= 30) {
-            uiOverlay.classList.add('sanity-low');
-        } else if (playerSanity <= 50) {
-            uiOverlay.classList.add('sanity-warning');
-        }
+        // Update Three.js HUD sanity bar
+        updateHUDSanity(playerSanity);
     }
 
     updateChunks();
@@ -1628,6 +1814,14 @@ function animate() {
     }
 
     composer.render();
+
+    // Render HUD on top (using autoClear = false to preserve the main scene)
+    if (hudScene && hudScene.visible) {
+        renderer.autoClear = false;
+        renderer.clearDepth();
+        renderer.render(hudScene, hudCamera);
+        renderer.autoClear = true;
+    }
 }
 
 async function initGame() {
@@ -1642,9 +1836,13 @@ async function initGame() {
         document.getElementById('crosshair').style.display = 'block';
     }
 
-    // Show UI after wake-up animation completes
+    // Show HUD after wake-up animation completes
     setTimeout(() => {
-        document.getElementById('ui-overlay').style.display = 'block';
+        // Show Three.js HUD
+        if (hudScene) {
+            hudScene.visible = true;
+            updateHUDSanity(playerSanity);
+        }
         // Initialize touch controls after UI is shown (mobile only)
         if (isMobile) {
             initTouchControls();
@@ -1713,6 +1911,9 @@ async function initGame() {
     // Fog: Reduced density and changed color to match the walls for a brighter look
     scene.fog = new THREE.FogExp2(0x333322, 0.02);
 
+    // Create HUD for sanity bar
+    createHUD();
+
     document.addEventListener('keydown', (e) => {
         if (e.code === 'KeyW') moveForward = true; if (e.code === 'KeyA') moveLeft = true;
         if (e.code === 'KeyS') moveBackward = true; if (e.code === 'KeyD') moveRight = true;
@@ -1756,6 +1957,7 @@ async function initGame() {
         camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
         composer.setSize(window.innerWidth, window.innerHeight);
+        updateHUDCamera();
     });
 
     isStarted = true; updateChunks(); animate();

@@ -8,86 +8,6 @@
         :root { --yellow: #d1c28c; --dim-yellow: #a69a6d; }
         body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', Courier, monospace; color: var(--yellow); }
 
-        #ui-overlay {
-            position: fixed;
-            top: 20px; left: 20px;
-            pointer-events: none;
-            z-index: 10;
-            display: none;
-            text-shadow: 2px 2px 2px #000;
-        }
-        #sanity-label {
-            font-size: 10px;
-            letter-spacing: 4px;
-            opacity: 0.6;
-            margin-bottom: 4px;
-        }
-        #sanity-container {
-            width: 280px;
-            height: 8px;
-            border: 1px solid rgba(209, 194, 140, 0.3);
-            background: rgba(0,0,0,0.7);
-            position: relative;
-            overflow: hidden;
-            box-shadow: 0 0 10px rgba(0,0,0,0.8), inset 0 0 5px rgba(0,0,0,0.5);
-        }
-        #sanity-bar {
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(90deg, #ff4444 0%, #ff8844 20%, #d1c28c 50%, #d1c28c 100%);
-            background-size: 200% 100%;
-            background-position: 100% 0;
-            transition: width 0.3s, background-position 0.5s, box-shadow 0.3s;
-            position: relative;
-        }
-        #sanity-glow {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.3) 50%, transparent 100%);
-            animation: sanity-shimmer 2s infinite;
-            pointer-events: none;
-        }
-        @keyframes sanity-shimmer {
-            0% { transform: translateX(-100%); }
-            100% { transform: translateX(100%); }
-        }
-        #sanity-percent {
-            font-size: 11px;
-            margin-top: 4px;
-            opacity: 0.7;
-            letter-spacing: 2px;
-            transition: color 0.3s, text-shadow 0.3s;
-        }
-        /* Low sanity states */
-        .sanity-critical #sanity-bar {
-            animation: critical-pulse 0.5s infinite alternate;
-        }
-        .sanity-critical #sanity-percent {
-            color: #ff4444;
-            text-shadow: 0 0 10px #ff4444;
-        }
-        @keyframes critical-pulse {
-            0% { box-shadow: 0 0 5px #ff4444, inset 0 0 3px #ff4444; }
-            100% { box-shadow: 0 0 15px #ff4444, inset 0 0 8px #ff4444; }
-        }
-        .sanity-low #sanity-bar {
-            animation: low-pulse 1s infinite alternate;
-        }
-        .sanity-low #sanity-percent {
-            color: #ff8844;
-            text-shadow: 0 0 8px #ff8844;
-        }
-        @keyframes low-pulse {
-            0% { box-shadow: 0 0 3px #ff8844; }
-            100% { box-shadow: 0 0 10px #ff8844; }
-        }
-        .sanity-warning #sanity-percent {
-            color: #ffcc44;
-        }
-
         #fps-counter {
             position: fixed;
             bottom: 20px; right: 20px;
@@ -167,10 +87,11 @@
         #touch-controls {
             display: none;
             position: fixed;
+            top: 0;
             bottom: 0;
             left: 0;
             right: 0;
-            height: 200px;
+            height: 100%;
             pointer-events: none;
             z-index: 20;
         }
@@ -187,6 +108,7 @@
             left: 20px;
             width: 150px;
             height: 150px;
+            z-index: 25;
         }
         #joystick-base {
             position: absolute;
@@ -216,20 +138,21 @@
         }
         #look-zone {
             right: 0;
-            left: 180px;
-            width: auto;
+            left: 0;
+            width: 100%;
             height: 100vh;
             bottom: 0;
             top: 0;
-        }
-        #look-indicator {
-            position: fixed;
-            bottom: 30px;
-            right: 30px;
-            font-size: 10px;
-            letter-spacing: 2px;
-            opacity: 0.4;
-            pointer-events: none;
+            /* L-shape: exclude bottom-left 190x190 area for joystick */
+            clip-path: polygon(
+                0 0,
+                100% 0,
+                100% 100%,
+                190px 100%,
+                190px calc(100% - 190px),
+                0 calc(100% - 190px)
+            );
+            z-index: 21;
         }
 
         /* Mobile-specific adjustments */
@@ -239,8 +162,6 @@
             .objective { padding: 0 20px; }
             .objective p { font-size: 0.9rem; line-height: 1.8; }
             button { padding: 12px 30px; font-size: 1rem; }
-            #ui-overlay { top: 10px; left: 10px; }
-            #sanity-container { width: 200px; }
             #fps-counter { bottom: 10px; right: 10px; font-size: 10px; }
         }
 
@@ -275,15 +196,6 @@
         </script>
     </div>
 
-    <div id="ui-overlay">
-        <div id="sanity-label">SANITY</div>
-        <div id="sanity-container">
-            <div id="sanity-bar"></div>
-            <div id="sanity-glow"></div>
-        </div>
-        <div id="sanity-percent">100%</div>
-    </div>
-
     <div id="fps-counter">FPS: <span id="fps-val">0</span></div>
     <div id="crosshair"></div>
 
@@ -295,7 +207,6 @@
             </div>
         </div>
         <div id="look-zone" class="touch-zone"></div>
-        <div id="look-indicator">DRAG TO LOOK</div>
     </div>
 
     <script type="module" src="/src/main.js"></script>
