@@ -42,6 +42,9 @@ npm run preview  # Preview production build
 - `ceiling-tile.png`: Drop ceiling tile texture
 - `carpet.png`: Carpet texture (currently unused - floor uses procedural shader)
 
+**3D Models** (`public/models/`):
+- `wall_outlet_american.glb`: American-style wall outlet, randomly placed on walls (5% chance per wall)
+
 **Floor/Ceiling System**:
 - Floor: Per-chunk procedural carpet shader with yellow-green base color and fiber texture pattern
 - Ceiling: Single fixed infinite plane with tiled drop ceiling texture
