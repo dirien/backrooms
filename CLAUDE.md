@@ -4,7 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Backrooms - A browser-based horror game built with Three.js. The game renders an infinite procedurally-generated maze of yellow office rooms (Level 0: The Lobby) with atmospheric audio and post-processing effects.
+Backrooms - A browser-based horror game built with Three.js.
+
+**Repository**: https://github.com/dirien/backrooms
+
+The game renders an infinite procedurally-generated maze of yellow office rooms (Level 0: The Lobby) with atmospheric audio and post-processing effects.
 
 ## Commands
 
