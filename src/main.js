@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
 /**
  * BACKROOMS - Level 0: The Lobby
@@ -12,8 +13,7 @@ let moveForward = false, moveBackward = false, moveLeft = false, moveRight = fal
 let velocity = new THREE.Vector3();
 let chunks = new Map();
 let walls = [];
-let lightAnchors = [];
-let activeLights = [];
+let lightPanels = [];
 let playerSanity = 100;
 let isStarted = false;
 
@@ -27,9 +27,8 @@ let wallGeoV, wallGeoH, floorGeo, ceilingGeo, lightPanelGeo, lightPanelMat;
 const CHUNK_SIZE = 24;
 const RENDER_DIST = 2;
 const PLAYER_RADIUS = 0.5;
-const MAX_ACTIVE_LIGHTS = 32;
 
-let audioCtx, whiteNoiseBuffer;
+let audioCtx;
 
 const POST_SHADER = {
     uniforms: {
@@ -78,41 +77,60 @@ const POST_SHADER = {
     `
 };
 
-function createGlobalResources() {
-    // SEAMLESS WALL TEXTURE
-    const wallCanvas = document.createElement('canvas');
-    wallCanvas.width = wallCanvas.height = 512;
-    const wCtx = wallCanvas.getContext('2d');
-    wCtx.fillStyle = '#ccb370';
-    wCtx.fillRect(0, 0, 512, 512);
+// Create wall geometry with proper UV mapping based on real-world dimensions
+function createWallGeometry(width, height, depth) {
+    const geo = new THREE.BoxGeometry(width, height, depth);
+    const uvAttribute = geo.attributes.uv;
+    const posAttribute = geo.attributes.position;
+    const normalAttribute = geo.attributes.normal;
 
-    wCtx.strokeStyle = 'rgba(0,0,0,0.06)';
-    wCtx.lineWidth = 1;
-    const step = 32;
-    for (let y = 0; y <= 512 + step; y += step) {
-        for (let x = 0; x <= 512 + step; x += step) {
-            wCtx.beginPath();
-            wCtx.moveTo(x, y - 10); wCtx.lineTo(x + 8, y); wCtx.lineTo(x + 10, y); wCtx.lineTo(x - 8, y);
-            wCtx.closePath(); wCtx.stroke();
+    // Scale factor for texture (how many units per texture repeat)
+    const texScale = 2.0;
+
+    for (let i = 0; i < uvAttribute.count; i++) {
+        const x = posAttribute.getX(i);
+        const y = posAttribute.getY(i);
+        const z = posAttribute.getZ(i);
+
+        const nx = normalAttribute.getX(i);
+        const ny = normalAttribute.getY(i);
+        const nz = normalAttribute.getZ(i);
+
+        let u, v;
+
+        if (Math.abs(nx) > 0.5) {
+            // Left/Right faces (X normal) - use Z and Y
+            u = (z + depth / 2) / texScale;
+            v = (y + height / 2) / texScale;
+        } else if (Math.abs(nz) > 0.5) {
+            // Front/Back faces (Z normal) - use X and Y
+            u = (x + width / 2) / texScale;
+            v = (y + height / 2) / texScale;
+        } else {
+            // Top/Bottom faces (Y normal) - use X and Z
+            u = (x + width / 2) / texScale;
+            v = (z + depth / 2) / texScale;
         }
+
+        uvAttribute.setXY(i, u, v);
     }
 
-    const wallData = wCtx.getImageData(0, 0, 512, 512);
-    const wD = wallData.data;
-    for (let i = 0; i < wD.length; i += 4) {
-        const n = (Math.random() - 0.5) * 12;
-        wD[i] += n; wD[i + 1] += n; wD[i + 2] += n;
-    }
-    wCtx.putImageData(wallData, 0, 0);
+    uvAttribute.needsUpdate = true;
+    return geo;
+}
 
-    const wallTex = new THREE.CanvasTexture(wallCanvas);
+function createGlobalResources() {
+    // WALL TEXTURE - Load from file
+    const textureLoader = new THREE.TextureLoader();
+    const wallTex = textureLoader.load('/graphics/wallpaper.png');
     wallTex.wrapS = wallTex.wrapT = THREE.RepeatWrapping;
+    wallTex.repeat.set(1, 1);
 
-    // SEAMLESS CARPET
+    // SEAMLESS CARPET - using backrooms palette (yellow)
     const carpetCanvas = document.createElement('canvas');
     carpetCanvas.width = carpetCanvas.height = 1024;
     const cCtx = carpetCanvas.getContext('2d');
-    cCtx.fillStyle = '#5c4d36';
+    cCtx.fillStyle = '#cfcca2';
     cCtx.fillRect(0, 0, 1024, 1024);
 
     for (let i = 0; i < 150; i++) {
@@ -120,7 +138,7 @@ function createGlobalResources() {
         const y = Math.random() * 1024;
         const r = 100 + Math.random() * 250;
         const g = cCtx.createRadialGradient(x, y, 0, x, y, r);
-        g.addColorStop(0, `rgba(30, 20, 10, ${0.1 + Math.random() * 0.1})`);
+        g.addColorStop(0, `rgba(100, 90, 50, ${0.05 + Math.random() * 0.05})`);
         g.addColorStop(1, 'rgba(30, 20, 10, 0)');
         cCtx.fillStyle = g;
         cCtx.beginPath(); cCtx.arc(x, y, r, 0, Math.PI * 2); cCtx.fill();
@@ -136,11 +154,11 @@ function createGlobalResources() {
     const carpetTex = new THREE.CanvasTexture(carpetCanvas);
     carpetTex.wrapS = carpetTex.wrapT = THREE.RepeatWrapping;
 
-    // CEILING
+    // CEILING - using backrooms palette
     const ceilCanvas = document.createElement('canvas');
     ceilCanvas.width = ceilCanvas.height = 512;
     const ceCtx = ceilCanvas.getContext('2d');
-    ceCtx.fillStyle = '#dbd2b8';
+    ceCtx.fillStyle = '#d7d3a2';
     ceCtx.fillRect(0, 0, 512, 512);
     ceCtx.strokeStyle = 'rgba(0,0,0,0.1)';
     ceCtx.lineWidth = 1;
@@ -152,24 +170,26 @@ function createGlobalResources() {
     ceilTex.wrapS = ceilTex.wrapT = THREE.RepeatWrapping;
     ceilTex.repeat.set(12, 12);
 
-    wallMat = new THREE.MeshStandardMaterial({ map: wallTex, roughness: 1.0, metalness: 0, color: 0x999999 });
-    floorMat = new THREE.MeshStandardMaterial({ map: carpetTex, roughness: 1.0, metalness: 0, color: 0xcccccc });
-    ceilingMat = new THREE.MeshStandardMaterial({ map: ceilTex, roughness: 1.0, metalness: 0, color: 0xeeeeee });
-    lightPanelMat = new THREE.MeshBasicMaterial({ color: 0xffffee });
+    wallMat = new THREE.MeshStandardMaterial({ map: wallTex, roughness: 1.0, metalness: 0, color: 0xffffff });
+    floorMat = new THREE.MeshStandardMaterial({ map: carpetTex, roughness: 1.0, metalness: 0, color: 0xffffff });
+    ceilingMat = new THREE.MeshStandardMaterial({ map: ceilTex, roughness: 1.0, metalness: 0, color: 0xaaaaaa });
+    lightPanelMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
 
     const gSize = 3;
     const cellSize = CHUNK_SIZE / gSize;
-    wallGeoV = new THREE.BoxGeometry(0.3, 3, cellSize);
-    wallGeoH = new THREE.BoxGeometry(cellSize, 3, 0.3);
     floorGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE);
     ceilingGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE);
     lightPanelGeo = new THREE.PlaneGeometry(cellSize * 0.4, cellSize * 0.2);
 
-    // Generate Noise Buffer for slams
-    const bufferSize = audioCtx.sampleRate * 2.0;
-    whiteNoiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
-    const output = whiteNoiseBuffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) output[i] = Math.random() * 2 - 1;
+    // Create wall geometries with proper UV mapping
+    const wallThickness = 0.3;
+    const wallHeight = 3;
+    const wallLengthV = cellSize + 0.31;
+    const wallLengthH = cellSize - 0.01;
+
+    wallGeoV = createWallGeometry(wallThickness, wallHeight, wallLengthV);
+    wallGeoH = createWallGeometry(wallLengthH, wallHeight, wallThickness);
+
 }
 
 function generateChunk(cx, cz) {
@@ -222,7 +242,7 @@ function generateChunk(cx, cz) {
             panel.matrixAutoUpdate = false;
             panel.updateMatrix();
             group.add(panel);
-            lightAnchors.push(new THREE.Vector3(lx + (cx * CHUNK_SIZE), 2.5, lz + (cz * CHUNK_SIZE)));
+            lightPanels.push(panel);
         }
     }
 
@@ -259,49 +279,143 @@ function updateChunks() {
         if (!activeKeys.has(key)) {
             scene.remove(obj);
             walls = walls.filter(w => !obj.children.includes(w));
-            lightAnchors = lightAnchors.filter(a => {
-                const ax = Math.floor(a.x / CHUNK_SIZE); const az = Math.floor(a.z / CHUNK_SIZE);
-                return Math.abs(ax - px) <= RENDER_DIST && Math.abs(az - pz) <= RENDER_DIST;
-            });
+            lightPanels = lightPanels.filter(p => !obj.children.includes(p));
             chunks.delete(key);
         }
     }
 }
 
-// --- PHANTOM SLAM SYSTEM ---
+// --- PHANTOM SOUNDS SYSTEM ---
 
-function playAmbientSlamSound() {
-    if (!isStarted || !audioCtx) return;
+let footstepsBuffer = null;
+let doorCloseBuffer = null;
+let humBuffer = null;
+let humGainNode = null;
+let humSource = null;
+
+async function loadAmbientSounds() {
+    try {
+        const [footstepsResponse, doorResponse, humResponse] = await Promise.all([
+            fetch('/sounds/footsteps.mp3'),
+            fetch('/sounds/door-close.mp3'),
+            fetch('/sounds/light-hum.mp3')
+        ]);
+        const [footstepsArrayBuffer, doorArrayBuffer, humArrayBuffer] = await Promise.all([
+            footstepsResponse.arrayBuffer(),
+            doorResponse.arrayBuffer(),
+            humResponse.arrayBuffer()
+        ]);
+        footstepsBuffer = await audioCtx.decodeAudioData(footstepsArrayBuffer);
+        doorCloseBuffer = await audioCtx.decodeAudioData(doorArrayBuffer);
+        humBuffer = await audioCtx.decodeAudioData(humArrayBuffer);
+        console.log('Ambient sounds loaded successfully');
+
+        // Start the looping hum sound
+        startHumSound();
+    } catch (e) {
+        console.warn('Failed to load ambient sounds:', e);
+    }
+}
+
+function startHumSound() {
+    if (!humBuffer || !audioCtx) return;
+
+    humSource = audioCtx.createBufferSource();
+    humSource.buffer = humBuffer;
+    humSource.loop = true;
+
+    humGainNode = audioCtx.createGain();
+    humGainNode.gain.value = 0.1; // Base volume (quieter when not near lights)
+
+    humSource.connect(humGainNode);
+    humGainNode.connect(audioCtx.destination);
+    humSource.start();
+}
+
+function updateHumVolume() {
+    if (!humGainNode || !camera || lightPanels.length === 0) return;
+
+    // Find distance to nearest light panel
+    let minDist = Infinity;
+    const playerPos = camera.position;
+
+    for (const panel of lightPanels) {
+        const panelWorldPos = new THREE.Vector3();
+        panel.getWorldPosition(panelWorldPos);
+        const dist = playerPos.distanceTo(panelWorldPos);
+        if (dist < minDist) minDist = dist;
+    }
+
+    // Volume increases when closer to light panels
+    // Base volume: 0.15 (when far), max volume under light: 0.6
+    const maxDist = 5; // Distance at which volume is at minimum
+    const proximity = Math.max(0, 1 - (minDist / maxDist));
+    const volume = 0.15 + proximity * 0.45;
+
+    humGainNode.gain.setTargetAtTime(volume, audioCtx.currentTime, 0.1);
+}
+
+function playAmbientFootsteps() {
+    if (!isStarted || !audioCtx || !footstepsBuffer) {
+        setTimeout(playAmbientFootsteps, 2000);
+        return;
+    }
     if (audioCtx.state === 'suspended') audioCtx.resume();
+
+    const source = audioCtx.createBufferSource();
+    source.buffer = footstepsBuffer;
 
     const panner = audioCtx.createStereoPanner();
     panner.pan.value = (Math.random() * 2) - 1;
+
+    const gainNode = audioCtx.createGain();
+    gainNode.gain.value = 0.3 + Math.random() * 0.5;
+
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 600 + Math.random() * 800;
+
+    source.connect(filter);
+    filter.connect(gainNode);
+    gainNode.connect(panner);
     panner.connect(audioCtx.destination);
 
-    const intensity = Math.random();
-    const duration = 0.6 + intensity * 0.4;
+    source.start();
 
-    const osc = audioCtx.createOscillator();
-    const noise = audioCtx.createBufferSource();
-    noise.buffer = whiteNoiseBuffer;
+    const nextFootsteps = 8000 + Math.random() * 17000;
+    setTimeout(playAmbientFootsteps, nextFootsteps);
+}
 
-    const g = audioCtx.createGain();
-    const f = audioCtx.createBiquadFilter();
+function playAmbientDoorClose() {
+    if (!isStarted || !audioCtx || !doorCloseBuffer) {
+        setTimeout(playAmbientDoorClose, 2000);
+        return;
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume();
 
-    osc.frequency.setValueAtTime(35 + intensity * 20, audioCtx.currentTime);
-    f.type = 'lowpass';
-    f.frequency.setValueAtTime(150 + intensity * 250, audioCtx.currentTime);
+    const source = audioCtx.createBufferSource();
+    source.buffer = doorCloseBuffer;
 
-    const vol = 0.05 + intensity * 0.3;
-    g.gain.setValueAtTime(vol, audioCtx.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+    const panner = audioCtx.createStereoPanner();
+    panner.pan.value = (Math.random() * 2) - 1;
 
-    osc.connect(f); noise.connect(f); f.connect(g); g.connect(panner);
-    osc.start(); noise.start();
-    osc.stop(audioCtx.currentTime + duration); noise.stop(audioCtx.currentTime + duration);
+    const gainNode = audioCtx.createGain();
+    gainNode.gain.value = 0.2 + Math.random() * 0.4; // Slightly quieter than footsteps
 
-    const nextDoor = 12000 + Math.random() * 20000;
-    setTimeout(playAmbientSlamSound, nextDoor);
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 400 + Math.random() * 600; // More muffled for distant door
+
+    source.connect(filter);
+    filter.connect(gainNode);
+    gainNode.connect(panner);
+    panner.connect(audioCtx.destination);
+
+    source.start();
+
+    // Doors close less frequently than footsteps (15-40 seconds)
+    const nextDoor = 15000 + Math.random() * 25000;
+    setTimeout(playAmbientDoorClose, nextDoor);
 }
 
 function animate() {
@@ -340,19 +454,10 @@ function animate() {
     }
 
     updateChunks();
+    updateHumVolume();
 
-    const sorted = lightAnchors.map(a => ({ a, d: a.distanceToSquared(camera.position) })).sort((a, b) => a.d - b.d);
-    for (let i = 0; i < MAX_ACTIVE_LIGHTS; i++) {
-        if (i < sorted.length) {
-            activeLights[i].position.copy(sorted[i].a);
-            activeLights[i].intensity = 80;
-            activeLights[i].decay = 2;
-            activeLights[i].distance = 20;
-        } else activeLights[i].intensity = 0;
-    }
-
-    composer.passes[1].uniforms.time.value = clock.elapsedTime;
-    composer.passes[1].uniforms.sanity.value = playerSanity / 100;
+    composer.passes[2].uniforms.time.value = clock.elapsedTime;
+    composer.passes[2].uniforms.sanity.value = playerSanity / 100;
     composer.render();
 }
 
@@ -379,16 +484,23 @@ function initGame() {
 
     composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
+
+    // Bloom pass for light panel glow effect
+    const bloomPass = new UnrealBloomPass(
+        new THREE.Vector2(window.innerWidth, window.innerHeight),
+        0.4,   // strength
+        0.5,   // radius
+        0.7    // threshold - only bright things (light panels) will bloom
+    );
+    composer.addPass(bloomPass);
+
     const effect = new ShaderPass(POST_SHADER);
     composer.addPass(effect);
 
     clock = new THREE.Clock();
-    scene.add(new THREE.AmbientLight(0xd1c28c, 0.5));
-
-    for (let i = 0; i < MAX_ACTIVE_LIGHTS; i++) {
-        const p = new THREE.PointLight(0xffffdd, 0, 15);
-        scene.add(p); activeLights.push(p);
-    }
+    // Even ambient lighting - the main light source for backrooms look
+    // Ambient light using backrooms palette (pale golden)
+    scene.add(new THREE.AmbientLight(0xd7d3a2, 4.0));
 
     document.addEventListener('keydown', (e) => {
         if (e.code === 'KeyW') moveForward = true; if (e.code === 'KeyA') moveLeft = true;
@@ -414,18 +526,10 @@ function initGame() {
         }
     });
 
-    // HUM
-    const humOsc = audioCtx.createOscillator();
-    const humGain = audioCtx.createGain();
-    const humFilter = audioCtx.createBiquadFilter();
-    humOsc.type = 'sawtooth'; humOsc.frequency.value = 60;
-    humFilter.frequency.value = 140;
-    humGain.gain.value = 0.008;
-    humOsc.connect(humFilter); humFilter.connect(humGain); humGain.connect(audioCtx.destination);
-    humOsc.start();
-
-    // Audio Presence
-    setTimeout(playAmbientSlamSound, 8000);
+    // Audio Presence - Load all ambient sounds (hum starts automatically when loaded)
+    loadAmbientSounds();
+    setTimeout(playAmbientFootsteps, 3000);  // First footsteps after 3 seconds
+    setTimeout(playAmbientDoorClose, 6000);  // First door close after 6 seconds
 
     window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
