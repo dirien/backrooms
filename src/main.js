@@ -940,7 +940,7 @@ let humSource = null;
 let phoneRingBuffer = null;
 let phoneRingSource = null;
 let phoneRingGainNode = null;
-const PHONE_AUDIO_MIN_DIST = CHUNK_SIZE * 2; // Start hearing at 2 chunks away
+const PHONE_AUDIO_CLOSE_DIST = 5; // Distance for maximum volume (very close)
 const PHONE_AUDIO_MAX_DIST = CHUNK_SIZE * 3; // Maximum hearing distance (3 chunks)
 
 async function loadAmbientSounds() {
@@ -1020,24 +1020,26 @@ function updatePhoneRingVolume() {
         if (dist < minDist) minDist = dist;
     }
 
-    // Only play sound if within range (2-3 chunks away)
-    // Volume increases as you get closer
+    // Calculate volume with smooth distance falloff
+    // Very quiet far away, only loud when very close
+    let volume = 0;
+
     if (minDist > PHONE_AUDIO_MAX_DIST) {
         // Too far, no sound
-        phoneRingGainNode.gain.setTargetAtTime(0, audioCtx.currentTime, 0.1);
-    } else if (minDist < PHONE_AUDIO_MIN_DIST) {
-        // Very close - full volume (clamped)
-        const proximity = 1 - (minDist / PHONE_AUDIO_MIN_DIST);
-        const volume = 0.5 + proximity * 0.5; // 0.5 to 1.0 when very close
-        phoneRingGainNode.gain.setTargetAtTime(volume, audioCtx.currentTime, 0.1);
+        volume = 0;
+    } else if (minDist <= PHONE_AUDIO_CLOSE_DIST) {
+        // Very close - full volume
+        volume = 1.0;
     } else {
-        // Within audible range - interpolate volume
-        const range = PHONE_AUDIO_MAX_DIST - PHONE_AUDIO_MIN_DIST;
-        const distFromMin = minDist - PHONE_AUDIO_MIN_DIST;
-        const proximity = 1 - (distFromMin / range);
-        const volume = proximity * 0.5; // 0 to 0.5 based on distance
-        phoneRingGainNode.gain.setTargetAtTime(volume, audioCtx.currentTime, 0.1);
+        // Use inverse-square-like falloff for realistic audio attenuation
+        // Normalized distance from close range to max range
+        const normalizedDist = (minDist - PHONE_AUDIO_CLOSE_DIST) / (PHONE_AUDIO_MAX_DIST - PHONE_AUDIO_CLOSE_DIST);
+        // Inverse square falloff: volume drops quickly with distance
+        // Using (1 - normalizedDist)^3 for even more dramatic falloff
+        volume = Math.pow(1 - normalizedDist, 3);
     }
+
+    phoneRingGainNode.gain.setTargetAtTime(volume, audioCtx.currentTime, 0.1);
 }
 
 function updateHumVolume() {
