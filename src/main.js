@@ -19,14 +19,14 @@ let playerSanity = 100;
 let isStarted = false;
 let debugMode = false;
 let debugNormals = [];
+let chunkBorders = [];
 
 let fpsFrames = 0;
 let fpsPrevTime = performance.now();
 
 // Shared Resources
 let wallMat, floorMat, ceilingMat;
-let wallGeoV, wallGeoH, floorGeo, lightPanelGeo, lightPanelMat;
-let infiniteCeiling;
+let wallGeoV, wallGeoH, floorGeo, ceilingGeo, lightPanelGeo, lightPanelMat;
 let outletModel = null;
 let gltfLoader;
 
@@ -257,11 +257,10 @@ function createGlobalResources() {
     wallTex.wrapS = wallTex.wrapT = THREE.RepeatWrapping;
     wallTex.repeat.set(1, 1);
 
-    // Load ceiling tile texture from image
+    // Load ceiling tile texture from image (per-chunk tiling)
     const ceilTex = loadCeilingTexture(textureLoader);
-    const planeSize = CHUNK_SIZE * (RENDER_DIST * 2 + 2);
     const tileWorldSize = 1.5;
-    ceilTex.repeat.set(planeSize / tileWorldSize, planeSize / tileWorldSize);
+    ceilTex.repeat.set(CHUNK_SIZE / tileWorldSize, CHUNK_SIZE / tileWorldSize);
 
     // Wall material - Lambert is faster and less finicky than Standard
     wallMat = new THREE.MeshLambertMaterial({
@@ -298,8 +297,9 @@ function createGlobalResources() {
     wallGeoV = createWallGeometry(wallThickness, wallHeight, wallLengthV);
     wallGeoH = createWallGeometry(wallLengthH, wallHeight, wallThickness);
 
-    // Floor geometry for per-chunk floor tiles
+    // Floor and ceiling geometry for per-chunk tiles
     floorGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE);
+    ceilingGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE);
 
     // Initialize GLTF loader
     gltfLoader = new GLTFLoader();
@@ -348,21 +348,56 @@ function toggleDebugMode() {
     debugNormals.forEach(line => {
         line.visible = debugMode;
     });
+    chunkBorders.forEach(border => {
+        border.visible = debugMode;
+    });
     console.log('Debug mode:', debugMode ? 'ON' : 'OFF');
 }
 
-// Create fixed ceiling only (floor is per-chunk)
-function createInfiniteCeiling() {
-    const planeSize = CHUNK_SIZE * (RENDER_DIST * 2 + 2);  // 144 units (24 * 6)
+// Create chunk border visualization (transparent red walls)
+function createChunkBorder(cx, cz) {
+    const group = new THREE.Group();
+    const borderMat = new THREE.MeshBasicMaterial({
+        color: 0xff0000,
+        transparent: true,
+        opacity: 0.15,
+        side: THREE.DoubleSide,
+        depthWrite: false
+    });
 
-    // Ceiling - fixed at origin
-    const ceilingGeo = new THREE.PlaneGeometry(planeSize, planeSize);
-    infiniteCeiling = new THREE.Mesh(ceilingGeo, ceilingMat);
-    infiniteCeiling.rotation.x = -Math.PI / 2;
-    // Position ceiling slightly above light panels (which are at 2.99) to avoid z-fighting
-    infiniteCeiling.position.set(0, 3.01, 0);  // Fixed at origin
+    const height = 3;
+    const halfSize = CHUNK_SIZE / 2;
 
-    scene.add(infiniteCeiling);
+    // Create 4 walls for the chunk border
+    // North wall (positive Z edge)
+    const northGeo = new THREE.PlaneGeometry(CHUNK_SIZE, height);
+    const north = new THREE.Mesh(northGeo, borderMat);
+    north.position.set(0, height / 2, halfSize);
+    group.add(north);
+
+    // South wall (negative Z edge)
+    const south = new THREE.Mesh(northGeo, borderMat);
+    south.position.set(0, height / 2, -halfSize);
+    south.rotation.y = Math.PI;
+    group.add(south);
+
+    // East wall (positive X edge)
+    const eastGeo = new THREE.PlaneGeometry(CHUNK_SIZE, height);
+    const east = new THREE.Mesh(eastGeo, borderMat);
+    east.position.set(halfSize, height / 2, 0);
+    east.rotation.y = -Math.PI / 2;
+    group.add(east);
+
+    // West wall (negative X edge)
+    const west = new THREE.Mesh(eastGeo, borderMat);
+    west.position.set(-halfSize, height / 2, 0);
+    west.rotation.y = Math.PI / 2;
+    group.add(west);
+
+    group.position.set(cx * CHUNK_SIZE, 0, cz * CHUNK_SIZE);
+    group.visible = debugMode;
+
+    return group;
 }
 
 function generateChunk(cx, cz) {
@@ -378,6 +413,14 @@ function generateChunk(cx, cz) {
     floor.updateMatrix();
     floor.receiveShadow = true; // Floor receives shadows
     group.add(floor);
+
+    // Ceiling tile for this chunk
+    const ceiling = new THREE.Mesh(ceilingGeo, ceilingMat);
+    ceiling.rotation.x = Math.PI / 2;
+    ceiling.position.set(0, 3.01, 0); // Slightly above light panels (at 2.99)
+    ceiling.matrixAutoUpdate = false;
+    ceiling.updateMatrix();
+    group.add(ceiling);
 
     // Walls and lights
     const gSize = 3;
@@ -532,6 +575,13 @@ function generateChunk(cx, cz) {
 
     group.position.set(cx * CHUNK_SIZE, 0, cz * CHUNK_SIZE);
     scene.add(group);
+
+    // Create and add chunk border visualization
+    const border = createChunkBorder(cx, cz);
+    scene.add(border);
+    chunkBorders.push(border);
+    group.userData.border = border;
+
     return group;
 }
 
@@ -564,6 +614,11 @@ function updateChunks() {
             scene.remove(obj);
             walls = walls.filter(w => !obj.children.includes(w));
             lightPanels = lightPanels.filter(p => !obj.children.includes(p));
+            // Clean up chunk border
+            if (obj.userData.border) {
+                scene.remove(obj.userData.border);
+                chunkBorders = chunkBorders.filter(b => b !== obj.userData.border);
+            }
             chunks.delete(key);
         }
     }
@@ -799,9 +854,6 @@ async function initGame() {
 
     // Fog: Reduced density and changed color to match the walls for a brighter look
     scene.fog = new THREE.FogExp2(0x333322, 0.02);
-
-    // Create infinite ceiling (floor is per-chunk)
-    createInfiniteCeiling();
 
     document.addEventListener('keydown', (e) => {
         if (e.code === 'KeyW') moveForward = true; if (e.code === 'KeyA') moveLeft = true;
