@@ -2410,16 +2410,17 @@ function hasLineOfSight(fromX, fromZ, toX, toZ) {
 }
 
 // Bacteria entity spawning system
-// Spawns at sanity thresholds (80%, 50%, 30%, 10%) with line-of-sight check
+// Spawns at sanity thresholds (50%, 30%, 10%) with line-of-sight check
 // Lower sanity = more frequent and longer appearances, closer distance
+// Entity only appears when visual distortion also starts (50% threshold)
 function updateBacteriaEntity() {
     if (!bacteriaModel || !camera || !isStarted) return;
 
     const currentTime = performance.now();
     const effectiveSanity = debugSanityOverride >= 0 ? DEBUG_SANITY_LEVELS[debugSanityOverride] : playerSanity;
 
-    // Only spawn at sanity thresholds: 80% and below
-    if (effectiveSanity > 80) {
+    // Only spawn at sanity thresholds: 50% and below (coincides with chromatic aberration start)
+    if (effectiveSanity > 50) {
         // High sanity - remove entity if visible
         if (bacteriaEntity && bacteriaVisible) {
             hideBacteriaEntity();
@@ -2429,24 +2430,23 @@ function updateBacteriaEntity() {
 
     // Calculate spawn parameters based on sanity
     // Lower sanity = more frequent spawns, longer visibility, closer distance
-    const sanityFactor = 1 - (effectiveSanity / 80); // 0 at 80%, 1 at 0%
+    const sanityFactor = 1 - (effectiveSanity / 50); // 0 at 50%, 1 at 0%
 
-    // Spawn delay: 3-6 seconds at 80%, 0.5-1.5 seconds at 0% (much more frequent)
+    // Spawn delay: 3-6 seconds at 50%, 0.5-1.5 seconds at 0% (much more frequent)
     const minDelay = 500 + (1 - sanityFactor) * 2500;
     const maxDelay = 1500 + (1 - sanityFactor) * 4500;
 
-    // Visible duration: 0.5-1.5 seconds at 80%, 1.5-3 seconds at 0% (brief, unsettling)
+    // Visible duration: 0.5-1.5 seconds at 50%, 1.5-3 seconds at 0% (brief, unsettling)
     const minDuration = 500 + sanityFactor * 1000;
     const maxDuration = 1500 + sanityFactor * 1500;
 
     // Spawn distance: closer at lower sanity (more terrifying)
-    // At 80% sanity: 30-50 units (far away, glimpses)
-    // At 50% sanity: 20-35 units (getting closer)
-    // At 30% sanity: 15-25 units (uncomfortably close)
-    // At 10% sanity: 10-18 units (right there, almost within reach)
+    // At 50% sanity: 25-40 units (far away, glimpses)
+    // At 30% sanity: 18-30 units (getting closer)
+    // At 10% sanity: 12-20 units (uncomfortably close)
     // At 0% sanity: 9-15 units (barely above disappear distance of 8)
-    const minDist = ENTITY_DISAPPEAR_DISTANCE + 1 + (1 - sanityFactor) * 22; // 9-31 range
-    const maxDist = ENTITY_DISAPPEAR_DISTANCE + 7 + (1 - sanityFactor) * 36; // 15-51 range
+    const minDist = ENTITY_DISAPPEAR_DISTANCE + 1 + (1 - sanityFactor) * 16; // 9-25 range
+    const maxDist = ENTITY_DISAPPEAR_DISTANCE + 7 + (1 - sanityFactor) * 25; // 15-40 range
 
     if (bacteriaVisible) {
         // Check if it's time to hide the entity
@@ -2734,17 +2734,17 @@ function animate() {
 
         // Only drain sanity if not in debug override mode
         if (debugSanityOverride === -1) {
-            // Sanity drain rate increases at insanity thresholds (30% faster than original)
-            // Base drain: 0.195/sec, increases as sanity drops
-            let drainRate = 0.195;
+            // Sanity drain rate increases at insanity thresholds (56% faster than original)
+            // Base drain: 0.234/sec, increases as sanity drops
+            let drainRate = 0.234;
             if (playerSanity <= 10) {
-                drainRate = 0.78; // 4x faster at critical insanity
+                drainRate = 0.936; // 4x faster at critical insanity
             } else if (playerSanity <= 30) {
-                drainRate = 0.52; // ~2.7x faster at severe insanity
+                drainRate = 0.624; // ~2.7x faster at severe insanity
             } else if (playerSanity <= 50) {
-                drainRate = 0.325; // ~1.7x faster at moderate insanity
+                drainRate = 0.39; // ~1.7x faster at moderate insanity
             } else if (playerSanity <= 80) {
-                drainRate = 0.26; // ~1.3x faster at mild insanity
+                drainRate = 0.312; // ~1.3x faster at mild insanity
             }
             playerSanity -= delta * drainRate;
             playerSanity = Math.max(0, playerSanity);
