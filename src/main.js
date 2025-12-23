@@ -49,7 +49,17 @@ let wallMat, floorMat, ceilingMat;
 let wallGeoV, wallGeoH, floorGeo, ceilingGeo, lightPanelGeo, lightPanelMat;
 let outletModel = null;
 let wallPhoneModel = null;
+let bacteriaModel = null; // Bacteria entity for horror appearances
 let gltfLoader;
+
+// Bacteria entity system
+let bacteriaEntity = null; // The actual entity instance in the scene
+let bacteriaVisible = false;
+let bacteriaLastSpawnTime = 0;
+let bacteriaNextSpawnDelay = 5000; // Time until next spawn attempt
+let bacteriaVisibleDuration = 0; // How long entity stays visible
+let bacteriaSpawnStartTime = 0;
+let demoBacteriaEntity = null; // Demo entity for testing
 
 const CHUNK_SIZE = 24;
 const RENDER_DIST = 2;
@@ -397,6 +407,126 @@ function createWallGeometry(width, height, depth) {
     uvAttribute.needsUpdate = true;
     return geo;
 }
+
+// Entity distortion shader - Digital glitch effect in black
+const ENTITY_DISTORTION_SHADER = {
+    uniforms: {
+        "time": { value: 0.0 },
+        "glitchIntensity": { value: 1.0 }
+    },
+    vertexShader: `
+        uniform float time;
+        uniform float glitchIntensity;
+
+        varying vec3 vNormal;
+        varying vec3 vPosition;
+        varying vec3 vWorldPosition;
+
+        float random(float x) {
+            return fract(sin(x * 12.9898) * 43758.5453);
+        }
+
+        void main() {
+            vNormal = normalMatrix * normal;
+            vPosition = position;
+
+            vec3 pos = position;
+
+            // Horizontal slice glitch - random slices shift horizontally
+            float sliceY = floor(pos.y * 20.0);
+            float glitchTime = floor(time * 10.0);
+            float sliceRand = random(sliceY + glitchTime);
+
+            if (sliceRand > 0.88) {
+                float offset = (random(sliceY * glitchTime) - 0.5) * 0.4 * glitchIntensity;
+                pos.x += offset;
+            }
+
+            // Vertical slice glitch
+            float sliceX = floor(pos.x * 15.0);
+            float sliceRandX = random(sliceX + glitchTime * 1.3);
+            if (sliceRandX > 0.92) {
+                pos.y += (random(sliceX * glitchTime) - 0.5) * 0.2 * glitchIntensity;
+            }
+
+            // Random vertex displacement
+            float dispTime = floor(time * 15.0);
+            float disp = step(0.95, random(dispTime + pos.y * 50.0 + pos.x * 30.0));
+            pos += normal * disp * 0.15 * glitchIntensity;
+
+            vec4 worldPos = modelMatrix * vec4(pos, 1.0);
+            vWorldPosition = worldPos.xyz;
+
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+        }
+    `,
+    fragmentShader: `
+        uniform float time;
+        uniform float glitchIntensity;
+
+        varying vec3 vNormal;
+        varying vec3 vPosition;
+        varying vec3 vWorldPosition;
+
+        float random(vec2 p) {
+            return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+        }
+
+        void main() {
+            // Base pure black
+            vec3 color = vec3(0.0);
+
+            // Dark gray tones for depth
+            vec3 darkGray = vec3(0.08);
+            vec3 midGray = vec3(0.15);
+
+            // Scan lines - horizontal
+            float scanLine = step(0.5, fract(vPosition.y * 60.0));
+            color += darkGray * scanLine * 0.5;
+
+            // Digital block noise
+            vec2 blockUV = floor(vPosition.xy * 25.0);
+            float blockNoise = random(blockUV + floor(time * 12.0));
+            float block = step(0.92, blockNoise);
+            color += midGray * block;
+
+            // Horizontal glitch lines - bright white flashes
+            float glitchLine = step(0.97, random(vec2(floor(vPosition.y * 40.0), floor(time * 20.0))));
+            color += vec3(0.3) * glitchLine * glitchIntensity;
+
+            // Vertical tearing effect
+            float tear = step(0.985, random(vec2(floor(vPosition.x * 30.0), floor(time * 8.0))));
+            color += vec3(0.2) * tear;
+
+            // Static noise
+            float staticNoise = random(vPosition.xy * 100.0 + time * 50.0);
+            color += vec3(staticNoise * 0.05);
+
+            // Edge highlight - subtle dark gray outline
+            vec3 viewDir = normalize(cameraPosition - vWorldPosition);
+            float fresnel = pow(1.0 - max(dot(normalize(vNormal), viewDir), 0.0), 3.0);
+            color += vec3(0.12) * fresnel;
+
+            // Random full black-out flicker
+            float blackout = step(0.98, random(vec2(floor(time * 25.0), 0.0)));
+            color *= (1.0 - blackout * 0.8);
+
+            // Occasional bright pixel glitch
+            float pixelGlitch = step(0.997, random(vPosition.xy * 200.0 + floor(time * 30.0)));
+            color += vec3(0.4) * pixelGlitch;
+
+            // RGB split on glitch frames
+            float rgbSplit = step(0.96, random(vec2(floor(time * 15.0), 1.0)));
+            if (rgbSplit > 0.5) {
+                float offset = sin(vPosition.y * 30.0) * 0.02;
+                color.r += offset * 0.3;
+                color.b -= offset * 0.3;
+            }
+
+            gl_FragColor = vec4(color, 1.0);
+        }
+    `
+};
 
 // Procedural carpet shader - creates fiber texture pattern
 const CARPET_SHADER = {
@@ -831,6 +961,132 @@ function loadWallPhoneModel() {
             resolve(); // Resolve anyway so game can continue without phones
         });
     });
+}
+
+// Load bacteria entity model - returns a promise
+function loadBacteriaModel() {
+    return new Promise((resolve) => {
+        gltfLoader.load('/models/bacteria_-_kane_pixels_backrooms.glb', (gltf) => {
+            bacteriaModel = gltf.scene;
+            bacteriaModel.scale.set(0.12, 0.12, 0.12); // smaller scale
+
+            // Apply black material to all meshes
+            bacteriaModel.traverse((child) => {
+                if (child.isMesh) {
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+
+                    // Replace with black material
+                    child.material = new THREE.MeshStandardMaterial({
+                        color: 0x000000,
+                        roughness: 0.8,
+                        metalness: 0.2,
+                        emissive: 0x111111,
+                        emissiveIntensity: 0.1
+                    });
+                }
+            });
+
+            console.log('Bacteria entity model loaded (black, 50% scale)');
+            resolve();
+        }, undefined, (error) => {
+            console.warn('Failed to load bacteria model:', error);
+            resolve(); // Resolve anyway so game can continue without entity
+        });
+    });
+}
+
+// Spawn a demo bacteria entity near spawn point for testing
+function spawnDemoBacteriaEntity() {
+    if (!bacteriaModel || !scene) {
+        console.warn('Cannot spawn demo entity - bacteriaModel:', !!bacteriaModel, 'scene:', !!scene);
+        return;
+    }
+
+    demoBacteriaEntity = bacteriaModel.clone();
+
+    // Apply distortion shader material to all meshes
+    const distortionMaterial = new THREE.ShaderMaterial({
+        uniforms: THREE.UniformsUtils.clone(ENTITY_DISTORTION_SHADER.uniforms),
+        vertexShader: ENTITY_DISTORTION_SHADER.vertexShader,
+        fragmentShader: ENTITY_DISTORTION_SHADER.fragmentShader,
+        side: THREE.DoubleSide
+    });
+
+    demoBacteriaEntity.traverse((child) => {
+        if (child.isMesh) {
+            child.material = distortionMaterial;
+        }
+    });
+
+    // Store material reference for time updates
+    demoBacteriaEntity.userData.distortionMaterial = distortionMaterial;
+
+    // Position it to the LEFT of spawn point (negative X), in an open area
+    // Player spawns at (0, 1.7, 0) looking down -Z axis
+    // Turn left (positive X is right, negative X is left when facing -Z)
+    demoBacteriaEntity.position.set(-4, 0, 0); // Temporary position
+    demoBacteriaEntity.scale.set(0.5, 0.5, 0.5); // Demo scale
+
+    // Update matrices before calculating bounding box
+    demoBacteriaEntity.updateMatrixWorld(true);
+
+    // Get bounding box of entire entity
+    const tempBox = new THREE.Box3().setFromObject(demoBacteriaEntity);
+    const lowestY = tempBox.min.y;
+
+    // Adjust position so lowest point is at floor level (y=0)
+    demoBacteriaEntity.position.y = -lowestY;
+    // Store the base Y position for later use
+    demoBacteriaEntity.userData.baseY = -lowestY;
+    console.log('Adjusted entity Y by', -lowestY, 'to align feet with floor. BBox min:', tempBox.min.y, 'max:', tempBox.max.y);
+
+    scene.add(demoBacteriaEntity);
+
+    // Add bounding box wireframe helper BEFORE adding axes helper (so axes don't affect bbox)
+    const boxHelper = new THREE.BoxHelper(demoBacteriaEntity, 0x00ff00); // Green wireframe
+    boxHelper.name = 'demoBacteriaBoxHelper';
+    boxHelper.visible = debugMode;
+    scene.add(boxHelper);
+    debugNormals.push(boxHelper);
+
+    // Add axes helper for debugging AFTER bounding box (Red=X, Green=Y, Blue=Z) - only visible in debug mode
+    const axesHelper = new THREE.AxesHelper(1);
+    axesHelper.visible = debugMode;
+    demoBacteriaEntity.add(axesHelper);
+    debugNormals.push(axesHelper);
+
+    console.log('Demo bacteria entity spawned at (-4, ' + demoBacteriaEntity.position.y + ', 0) - LEFT of player spawn, turn left to see it');
+    console.log('Entity children count:', demoBacteriaEntity.children.length);
+    console.log('Entity visible:', demoBacteriaEntity.visible);
+}
+
+// Update demo entity to face player (rotate on Y axis only)
+function updateDemoBacteriaEntity() {
+    if (!demoBacteriaEntity || !camera) return;
+
+    // Get player position (only X and Z, ignore Y)
+    const playerX = camera.position.x;
+    const playerZ = camera.position.z;
+
+    // Calculate angle to player on Y axis (green axis)
+    const dx = playerX - demoBacteriaEntity.position.x;
+    const dz = playerZ - demoBacteriaEntity.position.z;
+    const angle = Math.atan2(dx, dz);
+
+    // Only rotate on Y axis to face player
+    demoBacteriaEntity.rotation.set(0, angle, 0);
+
+    // Update distortion shader time uniform
+    if (demoBacteriaEntity.userData.distortionMaterial) {
+        demoBacteriaEntity.userData.distortionMaterial.uniforms.time.value = performance.now() / 1000;
+    }
+
+    // Update bounding box helper to follow the entity
+    const boxHelper = scene.getObjectByName('demoBacteriaBoxHelper');
+    if (boxHelper) {
+        boxHelper.update();
+    }
 }
 
 // Create a line showing a normal vector from a point
@@ -1372,13 +1628,19 @@ function generateChunk(cx, cz) {
                 outlet.rotation.y = Math.PI;
             }
 
-            // Add axes helper for debugging
+            group.add(outlet);
+
+            // Add bounding box helper BEFORE axes helper (so axes don't affect bbox)
+            const outletBoxHelper = new THREE.BoxHelper(outlet, 0xff00ff); // Magenta wireframe
+            outletBoxHelper.visible = debugMode;
+            group.add(outletBoxHelper);
+            debugNormals.push(outletBoxHelper);
+
+            // Add axes helper for debugging AFTER bounding box
             const axes = new THREE.AxesHelper(0.5);
             axes.visible = debugMode;
             outlet.add(axes);
             debugNormals.push(axes);
-
-            group.add(outlet);
         }
     }
 
@@ -1435,6 +1697,18 @@ function generateChunk(cx, cz) {
             }
 
             group.add(phone);
+
+            // Add bounding box helper BEFORE axes helper (so axes don't affect bbox)
+            const phoneBoxHelper = new THREE.BoxHelper(phone, 0x00ffff); // Cyan wireframe
+            phoneBoxHelper.visible = debugMode;
+            group.add(phoneBoxHelper);
+            debugNormals.push(phoneBoxHelper);
+
+            // Add axes helper for debugging AFTER bounding box
+            const phoneAxes = new THREE.AxesHelper(0.5);
+            phoneAxes.visible = debugMode;
+            phone.add(phoneAxes);
+            debugNormals.push(phoneAxes);
 
             // Track phone world position for audio (chunk offset + local position)
             const worldPhonePos = new THREE.Vector3(
@@ -1848,6 +2122,16 @@ function resetGameState() {
     phonePositions = [];
     chunkBorders = [];
     debugNormals = [];
+
+    // Reset bacteria entity state
+    if (bacteriaEntity) {
+        bacteriaEntity.visible = false;
+    }
+    bacteriaVisible = false;
+    bacteriaLastSpawnTime = 0;
+    bacteriaNextSpawnDelay = 5000;
+    bacteriaVisibleDuration = 0;
+    bacteriaSpawnStartTime = 0;
 }
 
 function updateHumVolume() {
@@ -2015,6 +2299,194 @@ function makeDistortionCurve(amount) {
     return curve;
 }
 
+// Bacteria entity spawning system
+// Spawns at sanity thresholds (80%, 50%, 30%, 10%) at unreachable distances
+// Lower sanity = more frequent and longer appearances
+function updateBacteriaEntity() {
+    if (!bacteriaModel || !camera || !isStarted) return;
+
+    const currentTime = performance.now();
+    const effectiveSanity = debugSanityOverride >= 0 ? DEBUG_SANITY_LEVELS[debugSanityOverride] : playerSanity;
+
+    // Only spawn at sanity thresholds: 80% and below
+    if (effectiveSanity > 80) {
+        // High sanity - remove entity if visible
+        if (bacteriaEntity && bacteriaVisible) {
+            hideBacteriaEntity();
+        }
+        return;
+    }
+
+    // Calculate spawn parameters based on sanity
+    // Lower sanity = more frequent spawns, longer visibility, closer distance
+    const sanityFactor = 1 - (effectiveSanity / 80); // 0 at 80%, 1 at 0%
+
+    // Spawn delay: 8-15 seconds at 80%, 2-5 seconds at 0%
+    const minDelay = 2000 + (1 - sanityFactor) * 6000;
+    const maxDelay = 5000 + (1 - sanityFactor) * 10000;
+
+    // Visible duration: 0.3-0.8 seconds at 80%, 1.5-4 seconds at 0%
+    const minDuration = 300 + sanityFactor * 1200;
+    const maxDuration = 800 + sanityFactor * 3200;
+
+    // Spawn distance: 25-40 units at 80%, 15-30 units at 0% (always unreachable but closer at low sanity)
+    const minDist = 15 + (1 - sanityFactor) * 10;
+    const maxDist = 30 + (1 - sanityFactor) * 10;
+
+    if (bacteriaVisible) {
+        // Check if it's time to hide the entity
+        const visibleTime = currentTime - bacteriaSpawnStartTime;
+        if (visibleTime >= bacteriaVisibleDuration) {
+            hideBacteriaEntity();
+            // Set next spawn delay with some randomness
+            bacteriaNextSpawnDelay = minDelay + Math.random() * (maxDelay - minDelay);
+            bacteriaLastSpawnTime = currentTime;
+        } else {
+            // Update entity position and distortion while visible
+            updateBacteriaDistortion(visibleTime / bacteriaVisibleDuration, sanityFactor);
+        }
+    } else {
+        // Check if it's time to spawn the entity
+        if (currentTime - bacteriaLastSpawnTime >= bacteriaNextSpawnDelay) {
+            // Random chance to spawn (increases at lower sanity)
+            const spawnChance = 0.3 + sanityFactor * 0.5; // 30-80% chance
+            if (Math.random() < spawnChance) {
+                spawnBacteriaEntity(minDist, maxDist);
+                bacteriaVisibleDuration = minDuration + Math.random() * (maxDuration - minDuration);
+                bacteriaSpawnStartTime = currentTime;
+            } else {
+                // Failed spawn check, try again soon
+                bacteriaLastSpawnTime = currentTime;
+                bacteriaNextSpawnDelay = 1000 + Math.random() * 2000;
+            }
+        }
+    }
+}
+
+// Spawn the bacteria entity at a position the player can see but not reach
+function spawnBacteriaEntity(minDist, maxDist) {
+    if (!bacteriaModel || !camera || !scene) return;
+
+    // Create entity if it doesn't exist
+    if (!bacteriaEntity) {
+        bacteriaEntity = bacteriaModel.clone();
+
+        // Apply distortion shader material to all meshes
+        const distortionMaterial = new THREE.ShaderMaterial({
+            uniforms: THREE.UniformsUtils.clone(ENTITY_DISTORTION_SHADER.uniforms),
+            vertexShader: ENTITY_DISTORTION_SHADER.vertexShader,
+            fragmentShader: ENTITY_DISTORTION_SHADER.fragmentShader,
+            side: THREE.DoubleSide
+        });
+
+        bacteriaEntity.traverse((child) => {
+            if (child.isMesh) {
+                child.material = distortionMaterial;
+            }
+        });
+
+        // Store material reference for time updates
+        bacteriaEntity.userData.distortionMaterial = distortionMaterial;
+
+        // Set base scale
+        bacteriaEntity.scale.set(0.5, 0.5, 0.5);
+
+        // Calculate bounding box to get floor offset
+        bacteriaEntity.updateMatrixWorld(true);
+        const tempBox = new THREE.Box3().setFromObject(bacteriaEntity);
+        bacteriaEntity.userData.floorOffset = -tempBox.min.y;
+
+        scene.add(bacteriaEntity);
+    }
+
+    // Calculate spawn position in front of the player at an unreachable distance
+    const playerPos = camera.position;
+    const playerDir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+    playerDir.y = 0;
+    playerDir.normalize();
+
+    // Add some random angle offset (-60 to +60 degrees) so it's not always directly ahead
+    const angleOffset = (Math.random() - 0.5) * Math.PI * 0.67;
+    playerDir.applyAxisAngle(new THREE.Vector3(0, 1, 0), angleOffset);
+
+    // Random distance within range
+    const distance = minDist + Math.random() * (maxDist - minDist);
+
+    // Set position with floor alignment
+    bacteriaEntity.position.set(
+        playerPos.x + playerDir.x * distance,
+        bacteriaEntity.userData.floorOffset || 0, // Align bottom with floor
+        playerPos.z + playerDir.z * distance
+    );
+
+    // Initial distortion state
+    bacteriaEntity.visible = true;
+    bacteriaVisible = true;
+
+    // Reset scale for spawn animation
+    bacteriaEntity.scale.set(0.01, 0.01, 0.01);
+}
+
+// Hide the bacteria entity
+function hideBacteriaEntity() {
+    if (bacteriaEntity) {
+        bacteriaEntity.visible = false;
+    }
+    bacteriaVisible = false;
+}
+
+// Update entity distortion effect based on visibility progress and sanity
+function updateBacteriaDistortion(progress, sanityFactor) {
+    if (!bacteriaEntity || !bacteriaVisible || !camera) return;
+
+    const time = performance.now() / 1000;
+
+    // Update distortion shader time uniform
+    if (bacteriaEntity.userData.distortionMaterial) {
+        bacteriaEntity.userData.distortionMaterial.uniforms.time.value = time;
+        // Increase glitch intensity at lower sanity
+        bacteriaEntity.userData.distortionMaterial.uniforms.glitchIntensity.value = 0.5 + sanityFactor * 0.5;
+    }
+
+    // Spawn animation: quick scale up at start
+    let scale = 0.5;
+    if (progress < 0.1) {
+        // Quick pop-in effect
+        scale = 0.5 * (progress / 0.1);
+    } else if (progress > 0.85) {
+        // Fade out effect - shrink and flicker
+        const fadeProgress = (progress - 0.85) / 0.15;
+        scale = 0.5 * (1 - fadeProgress);
+
+        // Flicker effect near the end
+        if (Math.random() < 0.3) {
+            bacteriaEntity.visible = !bacteriaEntity.visible;
+        } else {
+            bacteriaEntity.visible = true;
+        }
+    }
+
+    bacteriaEntity.scale.set(scale, scale, scale);
+
+    // Face the player - rotate on Y axis only
+    const playerX = camera.position.x;
+    const playerZ = camera.position.z;
+    const dx = playerX - bacteriaEntity.position.x;
+    const dz = playerZ - bacteriaEntity.position.z;
+    const angle = Math.atan2(dx, dz);
+    bacteriaEntity.rotation.set(0, angle, 0);
+
+    // Keep entity aligned to floor with slight bobbing at low sanity
+    const baseY = bacteriaEntity.userData.floorOffset || 0;
+    const bobAmount = sanityFactor * 0.1;
+    bacteriaEntity.position.y = baseY + Math.sin(time * 4) * bobAmount;
+
+    // Random flickering at very low sanity
+    if (sanityFactor > 0.7 && Math.random() < 0.05) {
+        bacteriaEntity.visible = !bacteriaEntity.visible;
+    }
+}
+
 function animate() {
     requestAnimationFrame(animate);
     const delta = clock.getDelta();
@@ -2083,6 +2555,7 @@ function animate() {
     updateChunks();
     updateHumVolume();
     updatePhoneRingVolume();
+    updateBacteriaEntity();
 
     composer.passes[2].uniforms.time.value = clock.elapsedTime;
     composer.passes[2].uniforms.sanity.value = playerSanity / 100;
@@ -2226,7 +2699,8 @@ async function initGame() {
     // Load models before generating chunks
     await Promise.all([
         loadOutletModel(),
-        loadWallPhoneModel()
+        loadWallPhoneModel(),
+        loadBacteriaModel()
     ]);
 
     scene = new THREE.Scene();
@@ -2339,7 +2813,9 @@ async function initGame() {
         updateHUDCamera();
     });
 
-    isStarted = true; updateChunks(); animate();
+    isStarted = true; updateChunks();
+
+    animate();
 }
 
 // Expose initGame globally for the HTML button

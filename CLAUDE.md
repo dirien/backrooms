@@ -48,6 +48,7 @@ npm run preview  # Preview production build
 **3D Models** (`public/models/`):
 - `wall_outlet_american.glb`: American-style wall outlet, randomly placed on walls (5% chance per wall)
 - `corded_public_phone_-_low_poly.glb`: Corded public phone, very rarely placed on walls (0.5% chance per wall). Phones never spawn within 4 chunks of the starting position (0,0) to force players to explore deeper into the Backrooms
+- `bacteria_-_kane_pixels_backrooms.glb`: Bacteria entity (Kane Pixels style) that appears at low sanity levels as a horror element
 
 **Floor/Ceiling System**:
 - Floor: Per-chunk procedural carpet shader with yellow-green base color and fiber texture pattern
@@ -92,6 +93,7 @@ npm run preview  # Preview production build
   - Audio distortion increases as sanity decreases (pitch shift, waveshaping, filtering)
   - Echo/delay effects become more pronounced at lower sanity
   - Sound frequency increases (plays more often) as sanity drops
+- Visual horror effects - Bacteria entity appearances (see Bacteria Entity System below)
 
 **Mobile/Touch Support**:
 - Automatic detection of touch devices (iOS, Android)
@@ -101,6 +103,22 @@ npm run preview  # Preview production build
 - Audio context handling for iOS Safari autoplay restrictions
 
 **Shared resources**: Geometries and materials are created once in `createGlobalResources()` and reused across all chunks for performance.
+
+**Bacteria Entity System**:
+- Kane Pixels-style bacteria entity appears at low sanity levels as a visual horror element
+- Spawning behavior based on sanity thresholds:
+  - **≤ 80%**: May appear 40-60 units away, visible for 3-6 seconds
+  - **≤ 50%**: Appears 30-50 units away, visible for 2-4 seconds, spawns more frequently
+  - **≤ 30%**: Appears 20-40 units away, visible for 1-3 seconds, very frequent spawns
+  - **≤ 10%**: Appears 15-30 units away, visible for 0.5-2 seconds, constant harassment
+- Entity always faces the player (Y-axis rotation only)
+- Custom `ENTITY_DISTORTION_SHADER` applies black digital glitch effect:
+  - Horizontal and vertical slice glitches
+  - Scan lines and block noise
+  - Fresnel edge glow
+  - Random flicker and static
+- Floor alignment via bounding box calculation prevents clipping
+- Debug mode shows wireframe bounding box and axes helper
 
 ## Dependencies
 
