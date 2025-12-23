@@ -23,6 +23,18 @@ npm run preview  # Preview production build
 
 **Entry point**: `index.html` loads `src/main.js` as an ES module.
 
+**Modular Architecture**:
+The codebase is organized into separate modules:
+- `src/main.js` - Main game loop, initialization, and coordination
+- `src/constants.js` - Game constants (CHUNK_SIZE, PLAYER_RADIUS, etc.)
+- `src/audio.js` - Audio system (hum, footsteps, phone ring, door sounds)
+- `src/hud.js` - HUD rendering (sanity bar, phone prompt)
+- `src/world.js` - Chunk generation and management
+- `src/entity.js` - Bacteria entity system
+- `src/input.js` - Keyboard, mouse, and touch input handling
+- `src/models.js` - 3D model loading (outlet, phone, bacteria)
+- `src/shaders/` - GLSL shaders (wall, post-processing, fade, wakeup, carpet, entity)
+
 **Main game logic** (`src/main.js`):
 - **Rendering**: Three.js with EffectComposer for post-processing (UnrealBloomPass for light panel glow, vignette, film grain, sanity-based distortion via custom GLSL shaders)
 - **World Generation**: Chunk-based infinite terrain using deterministic seeded randomness. Chunks are 24x24 units with frustum-based culling. Nearby chunks (RENDER_DIST = 2) are always loaded, while potentially visible chunks are preloaded up to PRELOAD_DIST = 4 to prevent pop-in
@@ -66,8 +78,10 @@ npm run preview  # Preview production build
 - Phones only spawn 4+ chunks away from the starting position, requiring exploration
 
 **Phone Interaction**:
-- When within 3 units of a phone, "Press E to answer" prompt appears in the HUD
-- Pressing E triggers phone pickup sound (loaded from external URL), stops phone ringing
+- When within 3 units of a phone, "Press E to answer" prompt appears in the HUD (or "Tap to answer" on mobile)
+- Desktop: Press E to interact with phone
+- Mobile: Tap directly on the phone mesh (uses Three.js raycasting for tap detection)
+- Pressing E or tapping triggers phone pickup sound (loaded from external URL), stops phone ringing
 - Screen fades to black over 2 seconds via `FADE_SHADER` post-processing pass
 - Game resets to start screen after fade completes, allowing replay
 
@@ -79,15 +93,15 @@ npm run preview  # Preview production build
 
 **Sanity System**:
 - Sanity drains over time while the player is moving
-- Drain rate accelerates at lower sanity thresholds (0.234/sec base, up to 0.936/sec at critical levels)
+- Drain rate accelerates at lower sanity thresholds (0.337/sec base, up to 1.348/sec at critical levels)
 - HUD rendered in Three.js using a separate orthographic scene (`hudScene`/`hudCamera`) with canvas textures for text
 - Sanity bar with "SANITY" label and percentage, color changes at low levels (yellow → orange → red)
 - Pulsing effect on the bar at critical sanity levels
 - Progressive visual distortion effects at different sanity thresholds:
-  - **80%**: Subtle wave distortion (drain: 0.312/sec)
-  - **50%**: Chromatic aberration, stronger waves, green tint (drain: 0.39/sec)
-  - **30%**: Tunnel vision, pulsing, spiral distortion, color cycling, double vision (drain: 0.624/sec)
-  - **10%**: Screen shake, reality fracturing, kaleidoscope effect, color inversion flashes, scan lines (drain: 0.936/sec)
+  - **80%**: Subtle wave distortion (drain: 0.449/sec)
+  - **50%**: Chromatic aberration, stronger waves, green tint (drain: 0.562/sec)
+  - **30%**: Tunnel vision, pulsing, spiral distortion, color cycling, double vision (drain: 0.899/sec)
+  - **10%**: Screen shake, reality fracturing, kaleidoscope effect, color inversion flashes, scan lines (drain: 1.348/sec)
 - Audio horror effects at low sanity (≤ 50%):
   - Door close sounds replaced with creepy kids laughing
   - Audio distortion increases as sanity decreases (pitch shift, waveshaping, filtering)
@@ -111,12 +125,12 @@ npm run preview  # Preview production build
 - **Unreachable behavior**: Entity disappears instantly when player gets within 8 units (`ENTITY_DISAPPEAR_DISTANCE`), making it impossible to reach
 - **Dynamic line-of-sight**: If player or entity loses line of sight (wall blocks view), entity vanishes instantly
 - **No animation**: Entity appears and disappears instantly without scaling or fading effects
-- Spawning behavior based on sanity thresholds (entity only appears at 50% sanity and below, coinciding with visual distortion):
-  - **≤ 50%**: May appear 25-40 units away, visible for 0.5-1.5 seconds
+- Spawning behavior based on sanity thresholds (entity appears at 65% sanity and below):
+  - **≤ 65%**: May appear 25-40 units away, visible for 0.5-1.5 seconds
   - **≤ 30%**: Appears 18-30 units away, getting closer
   - **≤ 10%**: Appears 12-20 units away, uncomfortably close
   - **0%**: Appears 9-15 units away, visible for 1.5-3 seconds
-- Spawn frequency: 3-6 seconds at 50% sanity, 0.5-1.5 seconds at critical sanity
+- Spawn frequency: 3-6 seconds at 65% sanity, 0.5-1.5 seconds at critical sanity
 - Entity always faces the player (Y-axis rotation only)
 - Custom `ENTITY_DISTORTION_SHADER` renders entity as pure black silhouette with subtle dark glitch effects
 - **Darkness effect**: `ENTITY_DARKNESS_SHADER` post-processing pass darkens the screen around the entity's position, creating an unsettling atmosphere. Darkness intensity and radius increase at lower sanity
