@@ -513,9 +513,9 @@ function createHUD() {
     hudCamera.position.z = 1;
 
     // HUD dimensions (in normalized screen space, -1 to 1)
-    const barWidth = 0.5;
-    const barHeight = 0.035;
-    const padding = 0.05;
+    const barWidth = 0.7;
+    const barHeight = 0.05;
+    const padding = 0.06;
 
     // Position in top-left corner
     const barX = -aspect + padding + barWidth / 2;
@@ -560,8 +560,8 @@ function createHUD() {
 
     // Create canvas texture for "SANITY" label
     sanityLabelCanvas = document.createElement('canvas');
-    sanityLabelCanvas.width = 256;
-    sanityLabelCanvas.height = 64;
+    sanityLabelCanvas.width = 512;
+    sanityLabelCanvas.height = 128;
     sanityLabelCtx = sanityLabelCanvas.getContext('2d');
 
     sanityLabelTexture = new THREE.CanvasTexture(sanityLabelCanvas);
@@ -569,38 +569,38 @@ function createHUD() {
 
     // Draw "SANITY" label
     sanityLabelCtx.fillStyle = 'rgba(0, 0, 0, 0)';
-    sanityLabelCtx.fillRect(0, 0, 256, 64);
-    sanityLabelCtx.font = '700 28px "Courier New", Courier, monospace';
-    sanityLabelCtx.fillStyle = 'rgba(209, 194, 140, 0.8)';
-    sanityLabelCtx.letterSpacing = '6px';
-    sanityLabelCtx.fillText('S A N I T Y', 10, 40);
+    sanityLabelCtx.fillRect(0, 0, 512, 128);
+    sanityLabelCtx.font = '700 48px "Courier New", Courier, monospace';
+    sanityLabelCtx.fillStyle = 'rgba(209, 194, 140, 0.9)';
+    sanityLabelCtx.letterSpacing = '8px';
+    sanityLabelCtx.fillText('S A N I T Y', 15, 75);
     sanityLabelTexture.needsUpdate = true;
 
-    const labelGeo = new THREE.PlaneGeometry(0.25, 0.06);
+    const labelGeo = new THREE.PlaneGeometry(0.38, 0.1);
     const labelMat = new THREE.MeshBasicMaterial({
         map: sanityLabelTexture,
         transparent: true
     });
     sanityLabelMesh = new THREE.Mesh(labelGeo, labelMat);
-    sanityLabelMesh.position.set(barX - barWidth / 2 + 0.125, barY + barHeight / 2 + 0.04, 0.01);
+    sanityLabelMesh.position.set(barX - barWidth / 2 + 0.19, barY + barHeight / 2 + 0.035, 0.01);
     hudScene.add(sanityLabelMesh);
 
     // Create canvas texture for percentage
     sanityPercentCanvas = document.createElement('canvas');
-    sanityPercentCanvas.width = 128;
-    sanityPercentCanvas.height = 64;
+    sanityPercentCanvas.width = 256;
+    sanityPercentCanvas.height = 128;
     sanityPercentCtx = sanityPercentCanvas.getContext('2d');
 
     sanityPercentTexture = new THREE.CanvasTexture(sanityPercentCanvas);
     sanityPercentTexture.minFilter = THREE.LinearFilter;
 
-    const percentGeo = new THREE.PlaneGeometry(0.12, 0.05);
+    const percentGeo = new THREE.PlaneGeometry(0.18, 0.08);
     const percentMat = new THREE.MeshBasicMaterial({
         map: sanityPercentTexture,
         transparent: true
     });
     sanityPercentMesh = new THREE.Mesh(percentGeo, percentMat);
-    sanityPercentMesh.position.set(barX - barWidth / 2 + 0.06, barY - barHeight / 2 - 0.035, 0.01);
+    sanityPercentMesh.position.set(barX + barWidth / 2 + 0.12, barY, 0.01);
     hudScene.add(sanityPercentMesh);
 
     // Initially hidden
@@ -633,7 +633,7 @@ function updateHUDSanity(sanity) {
     sanityBarFill.material.color = barColor;
 
     // Update percentage text
-    sanityPercentCtx.clearRect(0, 0, 128, 64);
+    sanityPercentCtx.clearRect(0, 0, 256, 128);
 
     let textColor;
     if (sanity <= 10) {
@@ -646,9 +646,9 @@ function updateHUDSanity(sanity) {
         textColor = 'rgba(209, 194, 140, 0.9)';
     }
 
-    sanityPercentCtx.font = '700 32px "Courier New", Courier, monospace';
+    sanityPercentCtx.font = '700 52px "Courier New", Courier, monospace';
     sanityPercentCtx.fillStyle = textColor;
-    sanityPercentCtx.fillText(Math.round(sanity) + '%', 10, 40);
+    sanityPercentCtx.fillText(Math.round(sanity) + '%', 15, 75);
     sanityPercentTexture.needsUpdate = true;
 
     // Add pulsing effect at low sanity
@@ -672,9 +672,9 @@ function updateHUDCamera() {
     hudCamera.updateProjectionMatrix();
 
     // Reposition HUD elements for new aspect ratio
-    const barWidth = 0.5;
-    const barHeight = 0.035;
-    const padding = 0.05;
+    const barWidth = 0.7;
+    const barHeight = 0.05;
+    const padding = 0.06;
     const barX = -aspect + padding + barWidth / 2;
     const barY = 1 - padding - barHeight / 2 - 0.04;
 
@@ -685,7 +685,7 @@ function updateHUDCamera() {
     hudScene.children.forEach(child => {
         if (child !== sanityBarBg && child !== sanityBarFill &&
             child !== sanityLabelMesh && child !== sanityPercentMesh &&
-            child.geometry && child.geometry.parameters.width > 0.5) {
+            child.geometry && child.geometry.parameters.width > 0.7) {
             child.position.x = barX;
             child.position.y = barY;
         }
@@ -694,11 +694,11 @@ function updateHUDCamera() {
     sanityBarFill.userData.originalX = barX;
     sanityBarFill.position.y = barY;
 
-    sanityLabelMesh.position.x = barX - barWidth / 2 + 0.125;
-    sanityLabelMesh.position.y = barY + barHeight / 2 + 0.04;
+    sanityLabelMesh.position.x = barX - barWidth / 2 + 0.19;
+    sanityLabelMesh.position.y = barY + barHeight / 2 + 0.035;
 
-    sanityPercentMesh.position.x = barX - barWidth / 2 + 0.06;
-    sanityPercentMesh.position.y = barY - barHeight / 2 - 0.035;
+    sanityPercentMesh.position.x = barX + barWidth / 2 + 0.12;
+    sanityPercentMesh.position.y = barY;
 
     // Update fill position based on current sanity
     updateHUDSanity(playerSanity);
