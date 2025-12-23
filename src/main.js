@@ -1011,6 +1011,12 @@ function cycleSanityLevel(direction) {
 
     playerSanity = DEBUG_SANITY_LEVELS[debugSanityOverride];
     console.log('Debug sanity level:', playerSanity + '%');
+
+    // When switching to 50% or below, immediately play the kids laughing sound for testing
+    if (playerSanity <= 50 && kidsLaughBuffer) {
+        console.log('Triggering kids laugh sound for testing (sanity: ' + playerSanity + '%)');
+        playAmbientDoorClose(); // This will play kids laugh since sanity <= 50%
+    }
 }
 
 // Create chunk border visualization (transparent red walls)
@@ -1556,6 +1562,7 @@ function updateChunks() {
 
 let footstepsBuffer = null;
 let doorCloseBuffer = null;
+let kidsLaughBuffer = null; // Creepy kids laughing for low sanity
 let humBuffer = null;
 let humGainNode = null;
 let humSource = null;
@@ -1645,6 +1652,18 @@ async function loadPhonePickupSound() {
         console.log('Phone pick-up sound loaded successfully');
     } catch (e) {
         console.warn('Failed to load phone pick-up sound:', e);
+    }
+}
+
+// Load creepy kids laughing sound for low sanity moments
+async function loadKidsLaughSound() {
+    try {
+        const response = await fetch('/sounds/kids-laugh.mp3');
+        const arrayBuffer = await response.arrayBuffer();
+        kidsLaughBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+        console.log('Kids laughing sound loaded successfully');
+    } catch (e) {
+        console.warn('Failed to load kids laughing sound:', e);
     }
 }
 
@@ -1892,29 +1911,108 @@ function playAmbientDoorClose() {
     }
     if (audioCtx.state === 'suspended') audioCtx.resume();
 
+    // Get effective sanity (use debug override if active)
+    const effectiveSanity = debugSanityOverride >= 0 ? [100, 80, 50, 30, 10, 0][debugSanityOverride] : playerSanity;
+
+    // When sanity is 50% or below, play creepy kids laughing instead of door sounds
+    const useKidsLaugh = effectiveSanity <= 50 && kidsLaughBuffer;
+
+    console.log('playAmbientDoorClose - sanity:', effectiveSanity, '%, useKidsLaugh:', useKidsLaugh, ', kidsLaughBuffer:', !!kidsLaughBuffer);
+
     const source = audioCtx.createBufferSource();
-    source.buffer = doorCloseBuffer;
+    source.buffer = useKidsLaugh ? kidsLaughBuffer : doorCloseBuffer;
 
     const panner = audioCtx.createStereoPanner();
     panner.pan.value = (Math.random() * 2) - 1;
 
     const gainNode = audioCtx.createGain();
-    gainNode.gain.value = 0.2 + Math.random() * 0.4; // Slightly quieter than footsteps
 
-    const filter = audioCtx.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.value = 400 + Math.random() * 600; // More muffled for distant door
+    if (useKidsLaugh) {
+        // Kids laughing gets louder and more frequent as sanity drops
+        // At 50% sanity: quieter. At 0% sanity: much louder
+        const sanityFactor = 1 - (effectiveSanity / 50); // 0 at 50%, 1 at 0%
+        gainNode.gain.value = 0.15 + sanityFactor * 0.5 + Math.random() * 0.2;
 
-    source.connect(filter);
-    filter.connect(gainNode);
-    gainNode.connect(panner);
-    panner.connect(audioCtx.destination);
+        // Pitch distortion - gets more unsettling as sanity decreases
+        // At low sanity, pitch shifts down for a demonic effect
+        const basePitch = 1.0 - sanityFactor * 0.3; // Slows down at low sanity
+        const pitchVariation = (Math.random() - 0.5) * 0.2 * (1 + sanityFactor);
+        source.playbackRate.value = basePitch + pitchVariation;
+
+        // Create distortion effect for scarier audio
+        const distortion = audioCtx.createWaveShaper();
+        const distortionAmount = sanityFactor * 50; // More distortion at lower sanity
+        distortion.curve = makeDistortionCurve(distortionAmount);
+        distortion.oversample = '4x';
+
+        // Filter chain - more extreme processing at lower sanity
+        const filter = audioCtx.createBiquadFilter();
+        // At higher sanity: bandpass for eerie effect. At lower: lowpass for muffled demonic sound
+        if (effectiveSanity <= 20) {
+            filter.type = 'lowpass';
+            filter.frequency.value = 600 + Math.random() * 400;
+            filter.Q.value = 5 + sanityFactor * 10;
+        } else {
+            filter.type = 'bandpass';
+            filter.frequency.value = 800 + Math.random() * 600;
+            filter.Q.value = 2 + sanityFactor * 5;
+        }
+
+        // Add a subtle echo/reverb effect for creepiness
+        const delay = audioCtx.createDelay();
+        delay.delayTime.value = 0.1 + sanityFactor * 0.15;
+        const delayGain = audioCtx.createGain();
+        delayGain.gain.value = 0.2 + sanityFactor * 0.3;
+
+        // Connect the audio chain: source -> distortion -> filter -> gain -> panner -> destination
+        // Also add delayed feedback for echo
+        source.connect(distortion);
+        distortion.connect(filter);
+        filter.connect(gainNode);
+        filter.connect(delay);
+        delay.connect(delayGain);
+        delayGain.connect(gainNode);
+        gainNode.connect(panner);
+        panner.connect(audioCtx.destination);
+    } else {
+        // Normal door close sound
+        gainNode.gain.value = 0.2 + Math.random() * 0.4;
+
+        const filter = audioCtx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.value = 400 + Math.random() * 600;
+
+        source.connect(filter);
+        filter.connect(gainNode);
+        gainNode.connect(panner);
+        panner.connect(audioCtx.destination);
+    }
 
     source.start();
 
-    // Doors close less frequently than footsteps (15-40 seconds)
-    const nextDoor = 15000 + Math.random() * 25000;
+    // Kids laughing plays more frequently at lower sanity
+    let nextDoor;
+    if (useKidsLaugh) {
+        const sanityFactor = 1 - (effectiveSanity / 50);
+        // At 50% sanity: 12-25 seconds. At 0% sanity: 4-10 seconds
+        nextDoor = (12000 - sanityFactor * 8000) + Math.random() * (13000 - sanityFactor * 8000);
+    } else {
+        // Normal door sounds: 15-40 seconds
+        nextDoor = 15000 + Math.random() * 25000;
+    }
     setTimeout(playAmbientDoorClose, nextDoor);
+}
+
+// Create distortion curve for audio waveshaping
+function makeDistortionCurve(amount) {
+    const samples = 44100;
+    const curve = new Float32Array(samples);
+    const deg = Math.PI / 180;
+    for (let i = 0; i < samples; i++) {
+        const x = (i * 2) / samples - 1;
+        curve[i] = ((3 + amount) * x * 20 * deg) / (Math.PI + amount * Math.abs(x));
+    }
+    return curve;
 }
 
 function animate() {
@@ -2230,6 +2328,7 @@ async function initGame() {
     // Audio Presence - Load all ambient sounds (hum starts automatically when loaded)
     loadAmbientSounds();
     loadPhonePickupSound(); // Load phone pick-up sound for interaction
+    loadKidsLaughSound(); // Load creepy kids laughing for low sanity horror
     setTimeout(playAmbientFootsteps, 3000);  // First footsteps after 3 seconds
     setTimeout(playAmbientDoorClose, 6000);  // First door close after 6 seconds
 

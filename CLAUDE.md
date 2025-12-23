@@ -36,7 +36,8 @@ npm run preview  # Preview production build
 **Audio files** (`public/sounds/`):
 - `light-hum.mp3`: Looping fluorescent light buzz
 - `footsteps.mp3`: Random distant footsteps
-- `door-close.mp3`: Random distant door closing
+- `door-close.mp3`: Random distant door closing (replaced by kids laughing when sanity ≤ 50%)
+- `kids-laugh.mp3`: Creepy kids laughing sound that replaces door sounds at low sanity
 - `phone-ring.mp3`: Phone ringing sound, loops when player is within 3 chunks of a wall phone (volume uses cubic falloff - very quiet far away, loud only when very close)
 
 **Graphics** (`public/graphics/`):
@@ -56,6 +57,7 @@ npm run preview  # Preview production build
 - Toggles visibility of wall normal debug lines (red)
 - Toggles chunk border visualization (transparent red walls at chunk boundaries)
 - Press `N`/`M` to cycle through sanity levels (100%, 80%, 50%, 30%, 10%, 0%) for testing distortion effects
+- When cycling to 50% or below, kids laughing sound plays immediately for testing audio horror effects
 
 **Game Objective**:
 - Find a telephone hidden deep in the Backrooms and call for help before sanity drains completely
@@ -85,6 +87,11 @@ npm run preview  # Preview production build
   - **50%**: Chromatic aberration, stronger waves, green tint (drain: 0.325/sec)
   - **30%**: Tunnel vision, pulsing, spiral distortion, color cycling, double vision (drain: 0.52/sec)
   - **10%**: Screen shake, reality fracturing, kaleidoscope effect, color inversion flashes, scan lines (drain: 0.78/sec)
+- Audio horror effects at low sanity (≤ 50%):
+  - Door close sounds replaced with creepy kids laughing
+  - Audio distortion increases as sanity decreases (pitch shift, waveshaping, filtering)
+  - Echo/delay effects become more pronounced at lower sanity
+  - Sound frequency increases (plays more often) as sanity drops
 
 **Mobile/Touch Support**:
 - Automatic detection of touch devices (iOS, Android)
