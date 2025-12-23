@@ -79,15 +79,15 @@ npm run preview  # Preview production build
 
 **Sanity System**:
 - Sanity drains over time while the player is moving
-- Drain rate accelerates at lower sanity thresholds (0.195/sec base, up to 0.78/sec at critical levels)
+- Drain rate accelerates at lower sanity thresholds (0.234/sec base, up to 0.936/sec at critical levels)
 - HUD rendered in Three.js using a separate orthographic scene (`hudScene`/`hudCamera`) with canvas textures for text
 - Sanity bar with "SANITY" label and percentage, color changes at low levels (yellow → orange → red)
 - Pulsing effect on the bar at critical sanity levels
 - Progressive visual distortion effects at different sanity thresholds:
-  - **80%**: Subtle wave distortion (drain: 0.26/sec)
-  - **50%**: Chromatic aberration, stronger waves, green tint (drain: 0.325/sec)
-  - **30%**: Tunnel vision, pulsing, spiral distortion, color cycling, double vision (drain: 0.52/sec)
-  - **10%**: Screen shake, reality fracturing, kaleidoscope effect, color inversion flashes, scan lines (drain: 0.78/sec)
+  - **80%**: Subtle wave distortion (drain: 0.312/sec)
+  - **50%**: Chromatic aberration, stronger waves, green tint (drain: 0.39/sec)
+  - **30%**: Tunnel vision, pulsing, spiral distortion, color cycling, double vision (drain: 0.624/sec)
+  - **10%**: Screen shake, reality fracturing, kaleidoscope effect, color inversion flashes, scan lines (drain: 0.936/sec)
 - Audio horror effects at low sanity (≤ 50%):
   - Door close sounds replaced with creepy kids laughing
   - Audio distortion increases as sanity decreases (pitch shift, waveshaping, filtering)
@@ -111,13 +111,12 @@ npm run preview  # Preview production build
 - **Unreachable behavior**: Entity disappears instantly when player gets within 8 units (`ENTITY_DISAPPEAR_DISTANCE`), making it impossible to reach
 - **Dynamic line-of-sight**: If player or entity loses line of sight (wall blocks view), entity vanishes instantly
 - **No animation**: Entity appears and disappears instantly without scaling or fading effects
-- Spawning behavior based on sanity thresholds (closer at lower sanity):
-  - **≤ 80%**: May appear 30-50 units away, visible for 0.5-1.5 seconds
-  - **≤ 50%**: Appears 20-35 units away, getting closer
-  - **≤ 30%**: Appears 15-25 units away, uncomfortably close
-  - **≤ 10%**: Appears 10-18 units away, almost within reach
+- Spawning behavior based on sanity thresholds (entity only appears at 50% sanity and below, coinciding with visual distortion):
+  - **≤ 50%**: May appear 25-40 units away, visible for 0.5-1.5 seconds
+  - **≤ 30%**: Appears 18-30 units away, getting closer
+  - **≤ 10%**: Appears 12-20 units away, uncomfortably close
   - **0%**: Appears 9-15 units away, visible for 1.5-3 seconds
-- Spawn frequency: 3-6 seconds at high sanity, 0.5-1.5 seconds at critical sanity
+- Spawn frequency: 3-6 seconds at 50% sanity, 0.5-1.5 seconds at critical sanity
 - Entity always faces the player (Y-axis rotation only)
 - Custom `ENTITY_DISTORTION_SHADER` renders entity as pure black silhouette with subtle dark glitch effects
 - **Darkness effect**: `ENTITY_DARKNESS_SHADER` post-processing pass darkens the screen around the entity's position, creating an unsettling atmosphere. Darkness intensity and radius increase at lower sanity
