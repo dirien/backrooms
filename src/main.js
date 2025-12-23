@@ -56,10 +56,11 @@ let gltfLoader;
 let bacteriaEntity = null; // The actual entity instance in the scene
 let bacteriaVisible = false;
 let bacteriaLastSpawnTime = 0;
-let bacteriaNextSpawnDelay = 5000; // Time until next spawn attempt
+let bacteriaNextSpawnDelay = 2000; // Time until next spawn attempt
 let bacteriaVisibleDuration = 0; // How long entity stays visible
 let bacteriaSpawnStartTime = 0;
 let demoBacteriaEntity = null; // Demo entity for testing
+const ENTITY_DISAPPEAR_DISTANCE = 8; // Entity disappears when player gets this close
 
 const CHUNK_SIZE = 24;
 const RENDER_DIST = 2;
@@ -473,61 +474,46 @@ const ENTITY_DISTORTION_SHADER = {
         }
 
         void main() {
-            // Base pure black
+            // Base pure black - entity is a dark silhouette
             vec3 color = vec3(0.0);
 
-            // Dark gray tones for depth
-            vec3 darkGray = vec3(0.08);
-            vec3 midGray = vec3(0.15);
+            // Very dark gray tones for minimal depth/detail
+            vec3 darkGray = vec3(0.03);
+            vec3 midGray = vec3(0.06);
 
-            // Scan lines - horizontal
+            // Subtle scan lines - barely visible
             float scanLine = step(0.5, fract(vPosition.y * 60.0));
-            color += darkGray * scanLine * 0.5;
+            color += darkGray * scanLine * 0.3;
 
-            // Digital block noise
+            // Digital block noise - very dark
             vec2 blockUV = floor(vPosition.xy * 25.0);
             float blockNoise = random(blockUV + floor(time * 12.0));
-            float block = step(0.92, blockNoise);
+            float block = step(0.94, blockNoise);
             color += midGray * block;
 
-            // Horizontal glitch lines - bright white flashes
-            float glitchLine = step(0.97, random(vec2(floor(vPosition.y * 40.0), floor(time * 20.0))));
-            color += vec3(0.3) * glitchLine * glitchIntensity;
+            // Occasional very subtle glitch lines
+            float glitchLine = step(0.98, random(vec2(floor(vPosition.y * 40.0), floor(time * 20.0))));
+            color += vec3(0.08) * glitchLine * glitchIntensity;
 
-            // Vertical tearing effect
-            float tear = step(0.985, random(vec2(floor(vPosition.x * 30.0), floor(time * 8.0))));
-            color += vec3(0.2) * tear;
-
-            // Static noise
+            // Subtle static noise
             float staticNoise = random(vPosition.xy * 100.0 + time * 50.0);
-            color += vec3(staticNoise * 0.05);
+            color += vec3(staticNoise * 0.02);
 
-            // Edge highlight - subtle dark gray outline
+            // Very subtle edge highlight
             vec3 viewDir = normalize(cameraPosition - vWorldPosition);
             float fresnel = pow(1.0 - max(dot(normalize(vNormal), viewDir), 0.0), 3.0);
-            color += vec3(0.12) * fresnel;
+            color += vec3(0.05) * fresnel;
 
             // Random full black-out flicker
             float blackout = step(0.98, random(vec2(floor(time * 25.0), 0.0)));
-            color *= (1.0 - blackout * 0.8);
-
-            // Occasional bright pixel glitch
-            float pixelGlitch = step(0.997, random(vPosition.xy * 200.0 + floor(time * 30.0)));
-            color += vec3(0.4) * pixelGlitch;
-
-            // RGB split on glitch frames
-            float rgbSplit = step(0.96, random(vec2(floor(time * 15.0), 1.0)));
-            if (rgbSplit > 0.5) {
-                float offset = sin(vPosition.y * 30.0) * 0.02;
-                color.r += offset * 0.3;
-                color.b -= offset * 0.3;
-            }
+            color *= (1.0 - blackout * 0.9);
 
             gl_FragColor = vec4(color, 1.0);
         }
     `
 };
 
+// Entity darkness shader - darkens the area around the entity on screen
 // Procedural carpet shader - creates fiber texture pattern
 const CARPET_SHADER = {
     uniforms: {
@@ -607,6 +593,62 @@ function loadCeilingTexture(textureLoader) {
     return ceilTex;
 }
 
+function enhanceMaterialWithDarkness(material) {
+    material.userData.darknessUniforms = {
+        entityWorldPos: { value: new THREE.Vector3() },
+        entityVisible: { value: 0.0 },
+        darknessRadius: { value: 5.0 },
+        darknessIntensity: { value: 0.0 }
+    };
+
+    material.onBeforeCompile = (shader) => {
+        shader.uniforms.entityWorldPos = material.userData.darknessUniforms.entityWorldPos;
+        shader.uniforms.entityVisible = material.userData.darknessUniforms.entityVisible;
+        shader.uniforms.darknessRadius = material.userData.darknessUniforms.darknessRadius;
+        shader.uniforms.darknessIntensity = material.userData.darknessUniforms.darknessIntensity;
+
+        shader.vertexShader = shader.vertexShader.replace(
+            '#include <common>',
+            `
+            #include <common>
+            varying vec3 vWorldPosition;
+            `
+        );
+        shader.vertexShader = shader.vertexShader.replace(
+            '#include <begin_vertex>',
+            `
+            #include <begin_vertex>
+            vWorldPosition = (modelMatrix * vec4(transformed, 1.0)).xyz;
+            `
+        );
+
+        shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <common>',
+            `
+            #include <common>
+            uniform vec3 entityWorldPos;
+            uniform float entityVisible;
+            uniform float darknessRadius;
+            uniform float darknessIntensity;
+            varying vec3 vWorldPosition;
+            `
+        );
+
+        shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <dithering_fragment>',
+            `
+            #include <dithering_fragment>
+            if (entityVisible > 0.5) {
+                float dist = distance(vWorldPosition, entityWorldPos);
+                float darknessFactor = smoothstep(0.0, darknessRadius, dist);
+                float darkMult = mix(1.0 - darknessIntensity, 1.0, darknessFactor);
+                gl_FragColor.rgb *= darkMult;
+            }
+            `
+        );
+    };
+}
+
 function createGlobalResources() {
     // WALL TEXTURE - Load from file
     const textureLoader = new THREE.TextureLoader();
@@ -624,12 +666,14 @@ function createGlobalResources() {
         map: wallTex,
         side: THREE.FrontSide
     });
+    enhanceMaterialWithDarkness(wallMat);
 
     // Floor material
     floorMat = new THREE.MeshLambertMaterial({
         color: 0xa9a865, 
         side: THREE.FrontSide
     });
+    enhanceMaterialWithDarkness(floorMat);
 
     // Ceiling tiles
     ceilingMat = new THREE.MeshStandardMaterial({
@@ -639,7 +683,9 @@ function createGlobalResources() {
         color: 0xbbbbbb,
         side: THREE.DoubleSide
     });
+    enhanceMaterialWithDarkness(ceilingMat);
     lightPanelMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    enhanceMaterialWithDarkness(lightPanelMat);
 
     const gSize = 3;
     const cellSize = CHUNK_SIZE / gSize;
@@ -2129,7 +2175,7 @@ function resetGameState() {
     }
     bacteriaVisible = false;
     bacteriaLastSpawnTime = 0;
-    bacteriaNextSpawnDelay = 5000;
+    bacteriaNextSpawnDelay = 2000;
     bacteriaVisibleDuration = 0;
     bacteriaSpawnStartTime = 0;
 }
@@ -2299,9 +2345,73 @@ function makeDistortionCurve(amount) {
     return curve;
 }
 
+// Check if there's a clear line of sight between two points (no walls blocking)
+// Uses simple 2D ray-box intersection against all walls
+function hasLineOfSight(fromX, fromZ, toX, toZ) {
+    const dirX = toX - fromX;
+    const dirZ = toZ - fromZ;
+    const rayLength = Math.sqrt(dirX * dirX + dirZ * dirZ);
+
+    if (rayLength < 0.01) return true; // Same point
+
+    const normX = dirX / rayLength;
+    const normZ = dirZ / rayLength;
+
+    // Check against all walls
+    for (let i = 0; i < walls.length; i++) {
+        const wall = walls[i];
+        const wPos = new THREE.Vector3();
+        wall.getWorldPosition(wPos);
+
+        // Get wall bounding box
+        const wBox = new THREE.Box3().setFromObject(wall);
+        const minX = wBox.min.x;
+        const maxX = wBox.max.x;
+        const minZ = wBox.min.z;
+        const maxZ = wBox.max.z;
+
+        // 2D ray-AABB intersection using slab method
+        let tMin = 0;
+        let tMax = rayLength;
+
+        // X slab
+        if (Math.abs(normX) > 0.0001) {
+            const t1 = (minX - fromX) / normX;
+            const t2 = (maxX - fromX) / normX;
+            const tNear = Math.min(t1, t2);
+            const tFar = Math.max(t1, t2);
+            tMin = Math.max(tMin, tNear);
+            tMax = Math.min(tMax, tFar);
+        } else {
+            // Ray parallel to X, check if within slab
+            if (fromX < minX || fromX > maxX) continue;
+        }
+
+        // Z slab
+        if (Math.abs(normZ) > 0.0001) {
+            const t1 = (minZ - fromZ) / normZ;
+            const t2 = (maxZ - fromZ) / normZ;
+            const tNear = Math.min(t1, t2);
+            const tFar = Math.max(t1, t2);
+            tMin = Math.max(tMin, tNear);
+            tMax = Math.min(tMax, tFar);
+        } else {
+            // Ray parallel to Z, check if within slab
+            if (fromZ < minZ || fromZ > maxZ) continue;
+        }
+
+        // Check if ray intersects this wall
+        if (tMin <= tMax && tMin < rayLength && tMax > 0) {
+            return false; // Wall blocks line of sight
+        }
+    }
+
+    return true; // No walls blocking
+}
+
 // Bacteria entity spawning system
-// Spawns at sanity thresholds (80%, 50%, 30%, 10%) at unreachable distances
-// Lower sanity = more frequent and longer appearances
+// Spawns at sanity thresholds (80%, 50%, 30%, 10%) with line-of-sight check
+// Lower sanity = more frequent and longer appearances, closer distance
 function updateBacteriaEntity() {
     if (!bacteriaModel || !camera || !isStarted) return;
 
@@ -2321,17 +2431,22 @@ function updateBacteriaEntity() {
     // Lower sanity = more frequent spawns, longer visibility, closer distance
     const sanityFactor = 1 - (effectiveSanity / 80); // 0 at 80%, 1 at 0%
 
-    // Spawn delay: 8-15 seconds at 80%, 2-5 seconds at 0%
-    const minDelay = 2000 + (1 - sanityFactor) * 6000;
-    const maxDelay = 5000 + (1 - sanityFactor) * 10000;
+    // Spawn delay: 3-6 seconds at 80%, 0.5-1.5 seconds at 0% (much more frequent)
+    const minDelay = 500 + (1 - sanityFactor) * 2500;
+    const maxDelay = 1500 + (1 - sanityFactor) * 4500;
 
-    // Visible duration: 0.3-0.8 seconds at 80%, 1.5-4 seconds at 0%
-    const minDuration = 300 + sanityFactor * 1200;
-    const maxDuration = 800 + sanityFactor * 3200;
+    // Visible duration: 0.5-1.5 seconds at 80%, 1.5-3 seconds at 0% (brief, unsettling)
+    const minDuration = 500 + sanityFactor * 1000;
+    const maxDuration = 1500 + sanityFactor * 1500;
 
-    // Spawn distance: 25-40 units at 80%, 15-30 units at 0% (always unreachable but closer at low sanity)
-    const minDist = 15 + (1 - sanityFactor) * 10;
-    const maxDist = 30 + (1 - sanityFactor) * 10;
+    // Spawn distance: closer at lower sanity (more terrifying)
+    // At 80% sanity: 30-50 units (far away, glimpses)
+    // At 50% sanity: 20-35 units (getting closer)
+    // At 30% sanity: 15-25 units (uncomfortably close)
+    // At 10% sanity: 10-18 units (right there, almost within reach)
+    // At 0% sanity: 9-15 units (barely above disappear distance of 8)
+    const minDist = ENTITY_DISAPPEAR_DISTANCE + 1 + (1 - sanityFactor) * 22; // 9-31 range
+    const maxDist = ENTITY_DISAPPEAR_DISTANCE + 7 + (1 - sanityFactor) * 36; // 15-51 range
 
     if (bacteriaVisible) {
         // Check if it's time to hide the entity
@@ -2349,23 +2464,50 @@ function updateBacteriaEntity() {
         // Check if it's time to spawn the entity
         if (currentTime - bacteriaLastSpawnTime >= bacteriaNextSpawnDelay) {
             // Random chance to spawn (increases at lower sanity)
-            const spawnChance = 0.3 + sanityFactor * 0.5; // 30-80% chance
+            const spawnChance = 0.6 + sanityFactor * 0.35; // 60-95% chance
             if (Math.random() < spawnChance) {
                 spawnBacteriaEntity(minDist, maxDist);
                 bacteriaVisibleDuration = minDuration + Math.random() * (maxDuration - minDuration);
                 bacteriaSpawnStartTime = currentTime;
             } else {
-                // Failed spawn check, try again soon
+                // Failed spawn check, try again very soon
                 bacteriaLastSpawnTime = currentTime;
-                bacteriaNextSpawnDelay = 1000 + Math.random() * 2000;
+                bacteriaNextSpawnDelay = 300 + Math.random() * 700;
             }
         }
     }
 }
 
-// Spawn the bacteria entity at a position the player can see but not reach
+// Check if entity bounding box at given position would collide with any walls
+function entityCollidesWithWalls(x, z, entityHalfWidth) {
+    // Create a bounding box for the entity at the given position
+    // Use a slightly larger radius to ensure no clipping
+    const padding = 0.3;
+    const halfSize = entityHalfWidth + padding;
+
+    for (let i = 0; i < walls.length; i++) {
+        const wBox = new THREE.Box3().setFromObject(walls[i]);
+
+        // Check if entity bounds overlap with wall bounds (2D check on XZ plane)
+        const entityMinX = x - halfSize;
+        const entityMaxX = x + halfSize;
+        const entityMinZ = z - halfSize;
+        const entityMaxZ = z + halfSize;
+
+        // Check for overlap
+        if (entityMaxX > wBox.min.x && entityMinX < wBox.max.x &&
+            entityMaxZ > wBox.min.z && entityMinZ < wBox.max.z) {
+            return true; // Collision detected
+        }
+    }
+
+    return false; // No collision
+}
+
+// Spawn the bacteria entity at a position the player can see (line-of-sight check)
+// Returns true if spawn was successful, false if no valid position found
 function spawnBacteriaEntity(minDist, maxDist) {
-    if (!bacteriaModel || !camera || !scene) return;
+    if (!bacteriaModel || !camera || !scene) return false;
 
     // Create entity if it doesn't exist
     if (!bacteriaEntity) {
@@ -2391,40 +2533,89 @@ function spawnBacteriaEntity(minDist, maxDist) {
         // Set base scale
         bacteriaEntity.scale.set(0.5, 0.5, 0.5);
 
-        // Calculate bounding box to get floor offset
+        // Calculate bounding box to get floor offset and half-width for collision
         bacteriaEntity.updateMatrixWorld(true);
         const tempBox = new THREE.Box3().setFromObject(bacteriaEntity);
         bacteriaEntity.userData.floorOffset = -tempBox.min.y;
 
+        // Store entity half-width for collision checking (use larger of X or Z extent)
+        const sizeX = (tempBox.max.x - tempBox.min.x) / 2;
+        const sizeZ = (tempBox.max.z - tempBox.min.z) / 2;
+        bacteriaEntity.userData.halfWidth = Math.max(sizeX, sizeZ);
+
         scene.add(bacteriaEntity);
     }
 
-    // Calculate spawn position in front of the player at an unreachable distance
     const playerPos = camera.position;
-    const playerDir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-    playerDir.y = 0;
-    playerDir.normalize();
+    const playerX = playerPos.x;
+    const playerZ = playerPos.z;
 
-    // Add some random angle offset (-60 to +60 degrees) so it's not always directly ahead
-    const angleOffset = (Math.random() - 0.5) * Math.PI * 0.67;
-    playerDir.applyAxisAngle(new THREE.Vector3(0, 1, 0), angleOffset);
+    // Get entity half-width for collision detection
+    const entityHalfWidth = bacteriaEntity.userData.halfWidth || 1.0;
 
-    // Random distance within range
-    const distance = minDist + Math.random() * (maxDist - minDist);
+    // Get camera's horizontal FOV (approximate from vertical FOV and aspect ratio)
+    // Default FOV is 75 degrees vertical, with typical 16:9 aspect ~= 100 degrees horizontal
+    // Use a narrower range to ensure entity is clearly visible (not at edge of screen)
+    const maxAngleOffset = Math.PI * 0.3; // ~54 degrees total spread (±27 degrees from center)
 
-    // Set position with floor alignment
-    bacteriaEntity.position.set(
-        playerPos.x + playerDir.x * distance,
-        bacteriaEntity.userData.floorOffset || 0, // Align bottom with floor
-        playerPos.z + playerDir.z * distance
-    );
+    // Try multiple positions to find one within view frustum with clear line of sight and no wall collision
+    const maxAttempts = 20;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        // Get player's forward direction
+        const playerDir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+        playerDir.y = 0;
+        playerDir.normalize();
 
-    // Initial distortion state
-    bacteriaEntity.visible = true;
-    bacteriaVisible = true;
+        // Random angle offset within the player's field of view (never behind)
+        const angleOffset = (Math.random() - 0.5) * maxAngleOffset;
+        playerDir.applyAxisAngle(new THREE.Vector3(0, 1, 0), angleOffset);
 
-    // Reset scale for spawn animation
-    bacteriaEntity.scale.set(0.01, 0.01, 0.01);
+        // Random distance within range
+        const distance = minDist + Math.random() * (maxDist - minDist);
+
+        const spawnX = playerX + playerDir.x * distance;
+        const spawnZ = playerZ + playerDir.z * distance;
+
+        // Check line of sight from player to spawn position
+        if (!hasLineOfSight(playerX, playerZ, spawnX, spawnZ)) {
+            continue; // No line of sight, try another position
+        }
+
+        // Check if entity would collide with any walls at this position
+        if (entityCollidesWithWalls(spawnX, spawnZ, entityHalfWidth)) {
+            continue; // Would clip through wall, try another position
+        }
+
+        // Valid position found - set entity position
+        bacteriaEntity.position.set(
+            spawnX,
+            bacteriaEntity.userData.floorOffset || 0,
+            spawnZ
+        );
+
+        // Set to full scale immediately (no animation)
+        bacteriaEntity.scale.set(0.5, 0.5, 0.5);
+
+        bacteriaEntity.visible = true;
+        bacteriaVisible = true;
+
+        return true;
+    }
+
+    // No valid position found after all attempts
+    return false;
+}
+
+function updateEnvironmentDarkness(entityPos, visible, radius, intensity) {
+    const materials = [wallMat, floorMat, ceilingMat, lightPanelMat];
+    materials.forEach(mat => {
+        if (mat && mat.userData.darknessUniforms) {
+            mat.userData.darknessUniforms.entityWorldPos.value.copy(entityPos);
+            mat.userData.darknessUniforms.entityVisible.value = visible ? 1.0 : 0.0;
+            mat.userData.darknessUniforms.darknessRadius.value = radius;
+            mat.userData.darknessUniforms.darknessIntensity.value = intensity;
+        }
+    });
 }
 
 // Hide the bacteria entity
@@ -2433,11 +2624,32 @@ function hideBacteriaEntity() {
         bacteriaEntity.visible = false;
     }
     bacteriaVisible = false;
+
+    // Disable darkness effect
+    updateEnvironmentDarkness(new THREE.Vector3(), false, 0, 0);
 }
 
 // Update entity distortion effect based on visibility progress and sanity
 function updateBacteriaDistortion(progress, sanityFactor) {
     if (!bacteriaEntity || !bacteriaVisible || !camera) return;
+
+    const playerX = camera.position.x;
+    const playerZ = camera.position.z;
+    const dx = playerX - bacteriaEntity.position.x;
+    const dz = playerZ - bacteriaEntity.position.z;
+    const distanceToPlayer = Math.sqrt(dx * dx + dz * dz);
+
+    // Entity disappears when player gets too close (unreachable effect)
+    if (distanceToPlayer < ENTITY_DISAPPEAR_DISTANCE) {
+        hideBacteriaEntity();
+        return;
+    }
+
+    // Also hide if line of sight is broken (player or entity moved behind a wall)
+    if (!hasLineOfSight(playerX, playerZ, bacteriaEntity.position.x, bacteriaEntity.position.z)) {
+        hideBacteriaEntity();
+        return;
+    }
 
     const time = performance.now() / 1000;
 
@@ -2448,31 +2660,26 @@ function updateBacteriaDistortion(progress, sanityFactor) {
         bacteriaEntity.userData.distortionMaterial.uniforms.glitchIntensity.value = 0.5 + sanityFactor * 0.5;
     }
 
-    // Spawn animation: quick scale up at start
-    let scale = 0.5;
-    if (progress < 0.1) {
-        // Quick pop-in effect
-        scale = 0.5 * (progress / 0.1);
-    } else if (progress > 0.85) {
-        // Fade out effect - shrink and flicker
-        const fadeProgress = (progress - 0.85) / 0.15;
-        scale = 0.5 * (1 - fadeProgress);
+    // Update darkness shader - use world position
+    const entityWorldPos = new THREE.Vector3(
+        bacteriaEntity.position.x,
+        bacteriaEntity.position.y + 1.0, 
+        bacteriaEntity.position.z
+    );
 
-        // Flicker effect near the end
-        if (Math.random() < 0.3) {
-            bacteriaEntity.visible = !bacteriaEntity.visible;
-        } else {
-            bacteriaEntity.visible = true;
-        }
-    }
+    // Darkness intensity increases at lower sanity
+    const darknessIntensity = 0.5 + sanityFactor * 0.4;
+    // Darkness radius increases at lower sanity (entity brings more darkness)
+    const darknessRadius = 4.0 + sanityFactor * 3.0;
 
-    bacteriaEntity.scale.set(scale, scale, scale);
+    updateEnvironmentDarkness(entityWorldPos, true, darknessRadius, darknessIntensity);
+
+    // Entity stays at full scale - no shrink animation, just instant disappear
+
+    // Entity stays at full scale - no shrink animation, just instant disappear
+    bacteriaEntity.scale.set(0.5, 0.5, 0.5);
 
     // Face the player - rotate on Y axis only
-    const playerX = camera.position.x;
-    const playerZ = camera.position.z;
-    const dx = playerX - bacteriaEntity.position.x;
-    const dz = playerZ - bacteriaEntity.position.z;
     const angle = Math.atan2(dx, dz);
     bacteriaEntity.rotation.set(0, angle, 0);
 
@@ -2480,11 +2687,6 @@ function updateBacteriaDistortion(progress, sanityFactor) {
     const baseY = bacteriaEntity.userData.floorOffset || 0;
     const bobAmount = sanityFactor * 0.1;
     bacteriaEntity.position.y = baseY + Math.sin(time * 4) * bobAmount;
-
-    // Random flickering at very low sanity
-    if (sanityFactor > 0.7 && Math.random() < 0.05) {
-        bacteriaEntity.visible = !bacteriaEntity.visible;
-    }
 }
 
 function animate() {
