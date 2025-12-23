@@ -106,17 +106,21 @@ npm run preview  # Preview production build
 
 **Bacteria Entity System**:
 - Kane Pixels-style bacteria entity appears at low sanity levels as a visual horror element
-- Spawning behavior based on sanity thresholds:
-  - **≤ 80%**: May appear 40-60 units away, visible for 3-6 seconds
-  - **≤ 50%**: Appears 30-50 units away, visible for 2-4 seconds, spawns more frequently
-  - **≤ 30%**: Appears 20-40 units away, visible for 1-3 seconds, very frequent spawns
-  - **≤ 10%**: Appears 15-30 units away, visible for 0.5-2 seconds, constant harassment
+- **Line-of-sight spawning**: Entity only spawns where player has clear line of sight (no walls blocking), always within the player's view frustum (never behind)
+- **Wall collision check**: Entity bounding box is checked against walls to prevent clipping through geometry
+- **Unreachable behavior**: Entity disappears instantly when player gets within 8 units (`ENTITY_DISAPPEAR_DISTANCE`), making it impossible to reach
+- **Dynamic line-of-sight**: If player or entity loses line of sight (wall blocks view), entity vanishes instantly
+- **No animation**: Entity appears and disappears instantly without scaling or fading effects
+- Spawning behavior based on sanity thresholds (closer at lower sanity):
+  - **≤ 80%**: May appear 30-50 units away, visible for 0.5-1.5 seconds
+  - **≤ 50%**: Appears 20-35 units away, getting closer
+  - **≤ 30%**: Appears 15-25 units away, uncomfortably close
+  - **≤ 10%**: Appears 10-18 units away, almost within reach
+  - **0%**: Appears 9-15 units away, visible for 1.5-3 seconds
+- Spawn frequency: 3-6 seconds at high sanity, 0.5-1.5 seconds at critical sanity
 - Entity always faces the player (Y-axis rotation only)
-- Custom `ENTITY_DISTORTION_SHADER` applies black digital glitch effect:
-  - Horizontal and vertical slice glitches
-  - Scan lines and block noise
-  - Fresnel edge glow
-  - Random flicker and static
+- Custom `ENTITY_DISTORTION_SHADER` renders entity as pure black silhouette with subtle dark glitch effects
+- **Darkness effect**: `ENTITY_DARKNESS_SHADER` post-processing pass darkens the screen around the entity's position, creating an unsettling atmosphere. Darkness intensity and radius increase at lower sanity
 - Floor alignment via bounding box calculation prevents clipping
 - Debug mode shows wireframe bounding box and axes helper
 
