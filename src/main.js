@@ -17,6 +17,9 @@ let sanityPercentCanvas, sanityPercentCtx, sanityPercentTexture;
 let wakeupPass = null;
 let wakeupStartTime = -1;
 const WAKEUP_DURATION = 2.0; // seconds
+let fadePass = null;
+let fadeStartTime = -1;
+const FADE_DURATION = 2.0; // seconds for fade to black
 let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
 let velocity = new THREE.Vector3();
 let chunks = new Map();
@@ -102,6 +105,32 @@ const WALL_SHADER = {
             vec3 finalColor = texColor.rgb * mix(1.0 - aoStrength, 1.0, ao);
 
             gl_FragColor = vec4(finalColor, texColor.a);
+        }
+    `
+};
+
+// Fade to black shader for phone interaction
+const FADE_SHADER = {
+    uniforms: {
+        "tDiffuse": { value: null },
+        "fadeAmount": { value: 0.0 }  // 0 = no fade, 1 = fully black
+    },
+    vertexShader: `
+        varying vec2 vUv;
+        void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: `
+        uniform sampler2D tDiffuse;
+        uniform float fadeAmount;
+        varying vec2 vUv;
+
+        void main() {
+            vec4 col = texture2D(tDiffuse, vUv);
+            col.rgb = mix(col.rgb, vec3(0.0), fadeAmount);
+            gl_FragColor = col;
         }
     `
 };
@@ -602,6 +631,34 @@ function createHUD() {
     sanityPercentMesh = new THREE.Mesh(percentGeo, percentMat);
     sanityPercentMesh.position.set(barX + barWidth / 2 + 0.12, barY, 0.01);
     hudScene.add(sanityPercentMesh);
+
+    // Create "Press E to interact" prompt for phone interaction
+    phoneInteractCanvas = document.createElement('canvas');
+    phoneInteractCanvas.width = 512;
+    phoneInteractCanvas.height = 128;
+    phoneInteractCtx = phoneInteractCanvas.getContext('2d');
+
+    phoneInteractTexture = new THREE.CanvasTexture(phoneInteractCanvas);
+    phoneInteractTexture.minFilter = THREE.LinearFilter;
+
+    // Draw the prompt text
+    phoneInteractCtx.fillStyle = 'rgba(0, 0, 0, 0)';
+    phoneInteractCtx.fillRect(0, 0, 512, 128);
+    phoneInteractCtx.font = '700 36px "Courier New", Courier, monospace';
+    phoneInteractCtx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+    phoneInteractCtx.textAlign = 'center';
+    phoneInteractCtx.fillText('Press E to answer', 256, 70);
+    phoneInteractTexture.needsUpdate = true;
+
+    const promptGeo = new THREE.PlaneGeometry(0.6, 0.15);
+    const promptMat = new THREE.MeshBasicMaterial({
+        map: phoneInteractTexture,
+        transparent: true
+    });
+    phoneInteractPromptMesh = new THREE.Mesh(promptGeo, promptMat);
+    phoneInteractPromptMesh.position.set(0, -0.3, 0); // Bottom center of screen
+    phoneInteractPromptMesh.visible = false; // Hidden by default
+    hudScene.add(phoneInteractPromptMesh);
 
     // Initially hidden
     hudScene.visible = false;
@@ -1510,6 +1567,16 @@ let phoneRingGainNode = null;
 const PHONE_AUDIO_CLOSE_DIST = 5; // Distance for maximum volume (very close)
 const PHONE_AUDIO_MAX_DIST = CHUNK_SIZE * 3; // Maximum hearing distance (3 chunks)
 
+// Phone pick-up audio
+let phonePickupBuffer = null;
+const PHONE_INTERACT_DIST = 3; // Distance to interact with phone
+let nearestPhoneDist = Infinity; // Track distance to nearest phone for HUD
+let phoneInteractPromptMesh = null; // HUD mesh for "Press E" prompt
+let phoneInteractCanvas = null;
+let phoneInteractCtx = null;
+let phoneInteractTexture = null;
+let isInteractingWithPhone = false; // Prevent multiple interactions
+
 async function loadAmbientSounds() {
     try {
         const [footstepsResponse, doorResponse, humResponse, phoneRingResponse] = await Promise.all([
@@ -1547,7 +1614,7 @@ function startHumSound() {
     humSource.loop = true;
 
     humGainNode = audioCtx.createGain();
-    humGainNode.gain.value = 0.1; // Base volume (quieter when not near lights)
+    humGainNode.gain.value = 0.12; // Base volume (quieter when not near lights, 20% increase)
 
     humSource.connect(humGainNode);
     humGainNode.connect(audioCtx.destination);
@@ -1569,12 +1636,29 @@ function startPhoneRingSound() {
     phoneRingSource.start();
 }
 
+// Load phone pick-up sound from external URL
+async function loadPhonePickupSound() {
+    try {
+        const response = await fetch('https://cdn.pixabay.com/download/audio/2022/03/10/audio_6650ed59b7.mp3?filename=phone-pick-up-46796.mp3');
+        const arrayBuffer = await response.arrayBuffer();
+        phonePickupBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+        console.log('Phone pick-up sound loaded successfully');
+    } catch (e) {
+        console.warn('Failed to load phone pick-up sound:', e);
+    }
+}
+
 function updatePhoneRingVolume() {
+    // Reset nearest phone distance
+    nearestPhoneDist = Infinity;
+
     if (!phoneRingGainNode || !camera || phonePositions.length === 0) {
         // No phones nearby, ensure silence
         if (phoneRingGainNode) {
             phoneRingGainNode.gain.setTargetAtTime(0, audioCtx.currentTime, 0.1);
         }
+        // Update HUD prompt visibility
+        updatePhoneInteractPrompt();
         return;
     }
 
@@ -1586,6 +1670,9 @@ function updatePhoneRingVolume() {
         const dist = playerPos.distanceTo(phonePos);
         if (dist < minDist) minDist = dist;
     }
+
+    // Store nearest phone distance for HUD
+    nearestPhoneDist = minDist;
 
     // Calculate volume with smooth distance falloff
     // Very quiet far away, only loud when very close
@@ -1607,6 +1694,141 @@ function updatePhoneRingVolume() {
     }
 
     phoneRingGainNode.gain.setTargetAtTime(volume, audioCtx.currentTime, 0.1);
+
+    // Update HUD prompt visibility
+    updatePhoneInteractPrompt();
+}
+
+// Update phone interaction prompt visibility based on proximity
+function updatePhoneInteractPrompt() {
+    if (!phoneInteractPromptMesh || !hudScene.visible) return;
+
+    // Show prompt when close enough to interact and not already interacting
+    const shouldShow = nearestPhoneDist <= PHONE_INTERACT_DIST && !isInteractingWithPhone;
+    phoneInteractPromptMesh.visible = shouldShow;
+
+    // Add pulsing effect when visible
+    if (shouldShow) {
+        const pulse = Math.sin(Date.now() * 0.005) * 0.15 + 0.85;
+        phoneInteractPromptMesh.material.opacity = pulse;
+    }
+}
+
+// Handle phone interaction when E is pressed
+function interactWithPhone() {
+    if (isInteractingWithPhone || nearestPhoneDist > PHONE_INTERACT_DIST) return;
+
+    isInteractingWithPhone = true;
+
+    // Hide the interaction prompt immediately
+    if (phoneInteractPromptMesh) {
+        phoneInteractPromptMesh.visible = false;
+    }
+
+    // Stop the phone ringing sound completely
+    if (phoneRingSource) {
+        phoneRingSource.stop();
+        phoneRingSource = null;
+    }
+    if (phoneRingGainNode) {
+        phoneRingGainNode.gain.value = 0;
+    }
+
+    // Play phone pick-up sound
+    if (phonePickupBuffer && audioCtx) {
+        const source = audioCtx.createBufferSource();
+        source.buffer = phonePickupBuffer;
+
+        const gainNode = audioCtx.createGain();
+        gainNode.gain.value = 0.8;
+
+        source.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+        source.start();
+    }
+
+    // Start fade to black
+    if (fadePass) {
+        fadePass.enabled = true;
+        fadeStartTime = performance.now();
+    }
+}
+
+// Reset game state for returning to start screen
+function resetGameState() {
+    // Hide game UI
+    document.getElementById('fps-counter').style.display = 'none';
+    document.getElementById('crosshair').style.display = 'none';
+
+    // Hide touch controls if mobile
+    const touchControls = document.getElementById('touch-controls');
+    if (touchControls) {
+        touchControls.classList.remove('active');
+    }
+
+    // Show start screen
+    document.getElementById('start-screen').style.display = 'flex';
+
+    // Exit pointer lock
+    if (document.pointerLockElement) {
+        document.exitPointerLock();
+    }
+
+    // Reset game variables
+    isStarted = false;
+    isInteractingWithPhone = false;
+    playerSanity = 100;
+    fadeStartTime = -1;
+
+    // Reset camera position
+    if (camera) {
+        camera.position.set(0, 1.7, 0);
+        camera.rotation.set(0, 0, 0);
+    }
+
+    // Reset movement states
+    moveForward = false;
+    moveBackward = false;
+    moveLeft = false;
+    moveRight = false;
+    velocity.set(0, 0, 0);
+
+    // Reset joystick for mobile
+    joystickInput = { x: 0, y: 0 };
+    joystickActive = false;
+
+    // Hide HUD
+    if (hudScene) {
+        hudScene.visible = false;
+    }
+
+    // Reset fade pass
+    if (fadePass) {
+        fadePass.enabled = false;
+        fadePass.uniforms.fadeAmount.value = 0;
+    }
+
+    // Reset wakeup pass for next game start
+    if (wakeupPass) {
+        wakeupPass.enabled = false;
+        wakeupPass.uniforms.eyeOpen.value = 0;
+        wakeupPass.uniforms.blurAmount.value = 1.0;
+        wakeupPass.uniforms.effectOpacity.value = 1.0;
+    }
+
+    // Clear all chunks and regenerate fresh on next start
+    for (const [key, obj] of chunks.entries()) {
+        scene.remove(obj);
+        if (obj.userData.border) {
+            scene.remove(obj.userData.border);
+        }
+        chunks.delete(key);
+    }
+    walls = [];
+    lightPanels = [];
+    phonePositions = [];
+    chunkBorders = [];
+    debugNormals = [];
 }
 
 function updateHumVolume() {
@@ -1624,10 +1846,10 @@ function updateHumVolume() {
     }
 
     // Volume increases when closer to light panels
-    // Base volume: 0.15 (when far), max volume under light: 0.6
+    // Base volume: 0.18 (when far), max volume under light: 0.72 (20% increase)
     const maxDist = 5; // Distance at which volume is at minimum
     const proximity = Math.max(0, 1 - (minDist / maxDist));
-    const volume = 0.15 + proximity * 0.45;
+    const volume = 0.18 + proximity * 0.54;
 
     humGainNode.gain.setTargetAtTime(volume, audioCtx.currentTime, 0.1);
 }
@@ -1740,17 +1962,17 @@ function animate() {
 
         // Only drain sanity if not in debug override mode
         if (debugSanityOverride === -1) {
-            // Sanity drain rate increases at insanity thresholds
-            // Base drain: 0.15/sec, increases as sanity drops
-            let drainRate = 0.15;
+            // Sanity drain rate increases at insanity thresholds (30% faster than original)
+            // Base drain: 0.195/sec, increases as sanity drops
+            let drainRate = 0.195;
             if (playerSanity <= 10) {
-                drainRate = 0.6; // 4x faster at critical insanity
+                drainRate = 0.78; // 4x faster at critical insanity
             } else if (playerSanity <= 30) {
-                drainRate = 0.4; // ~2.7x faster at severe insanity
+                drainRate = 0.52; // ~2.7x faster at severe insanity
             } else if (playerSanity <= 50) {
-                drainRate = 0.25; // ~1.7x faster at moderate insanity
+                drainRate = 0.325; // ~1.7x faster at moderate insanity
             } else if (playerSanity <= 80) {
-                drainRate = 0.2; // ~1.3x faster at mild insanity
+                drainRate = 0.26; // ~1.3x faster at mild insanity
             }
             playerSanity -= delta * drainRate;
             playerSanity = Math.max(0, playerSanity);
@@ -1813,6 +2035,21 @@ function animate() {
         }
     }
 
+    // Update fade to black animation (for phone interaction)
+    if (fadePass && fadeStartTime >= 0) {
+        const elapsed = (performance.now() - fadeStartTime) / 1000;
+        const progress = Math.min(elapsed / FADE_DURATION, 1.0);
+
+        // Smooth ease-in for fade
+        const eased = progress * progress;
+        fadePass.uniforms.fadeAmount.value = eased;
+
+        // When fade is complete, reset to start screen
+        if (progress >= 1.0) {
+            resetGameState();
+        }
+    }
+
     composer.render();
 
     // Render HUD on top (using autoClear = false to preserve the main scene)
@@ -1827,6 +2064,13 @@ function animate() {
 async function initGame() {
     document.getElementById('start-screen').style.display = 'none';
     document.getElementById('fps-counter').style.display = 'block';
+
+    // Reset interaction state
+    isInteractingWithPhone = false;
+    playerSanity = 100;
+
+    // Check if this is a restart (scene already exists)
+    const isRestart = scene !== undefined && scene !== null;
 
     // Detect mobile device
     isMobile = detectMobile();
@@ -1849,6 +2093,34 @@ async function initGame() {
         }
     }, WAKEUP_DURATION * 1000);
 
+    if (isRestart) {
+        // For restart, just reset camera and re-enable wakeup
+        camera.position.set(0, 1.7, 0);
+        camera.rotation.set(0, 0, 0);
+
+        // Reset and enable wakeup pass
+        wakeupPass.uniforms.eyeOpen.value = 0.0;
+        wakeupPass.uniforms.blurAmount.value = 1.0;
+        wakeupPass.uniforms.effectOpacity.value = 1.0;
+        wakeupPass.enabled = true;
+        wakeupStartTime = performance.now();
+
+        // Make sure fade pass is disabled
+        fadePass.enabled = false;
+        fadePass.uniforms.fadeAmount.value = 0.0;
+
+        // Resume audio context if suspended
+        if (audioCtx && audioCtx.state === 'suspended') {
+            audioCtx.resume();
+        }
+
+        // Regenerate initial chunks
+        isStarted = true;
+        updateChunks();
+        return;
+    }
+
+    // First time initialization
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
     createGlobalResources();
@@ -1894,11 +2166,17 @@ async function initGame() {
     wakeupPass.uniforms.effectOpacity.value = 1.0;
     composer.addPass(wakeupPass);
 
+    // Fade to black effect for phone interaction
+    fadePass = new ShaderPass(FADE_SHADER);
+    fadePass.uniforms.fadeAmount.value = 0.0;
+    fadePass.enabled = false; // Disabled by default, enabled when interacting with phone
+    composer.addPass(fadePass);
+
     // Start the wake-up animation
     wakeupStartTime = performance.now();
 
     clock = new THREE.Clock();
-    
+
     // 1. Base Ambient Light - Significantly increased for high visibility
     scene.add(new THREE.AmbientLight(0xd7d3a2, 2.5));
 
@@ -1920,6 +2198,7 @@ async function initGame() {
         if (e.code === 'KeyO') toggleDebugMode();
         if (e.code === 'KeyN') cycleSanityLevel(-1); // Previous sanity level
         if (e.code === 'KeyM') cycleSanityLevel(1);  // Next sanity level
+        if (e.code === 'KeyE') interactWithPhone();  // Interact with phone
     });
     document.addEventListener('keyup', (e) => {
         if (e.code === 'KeyW') moveForward = false; if (e.code === 'KeyA') moveLeft = false;
@@ -1950,6 +2229,7 @@ async function initGame() {
 
     // Audio Presence - Load all ambient sounds (hum starts automatically when loaded)
     loadAmbientSounds();
+    loadPhonePickupSound(); // Load phone pick-up sound for interaction
     setTimeout(playAmbientFootsteps, 3000);  // First footsteps after 3 seconds
     setTimeout(playAmbientDoorClose, 6000);  // First door close after 6 seconds
 

@@ -62,6 +62,12 @@ npm run preview  # Preview production build
 - Start screen displays the objective to the player
 - Phones only spawn 4+ chunks away from the starting position, requiring exploration
 
+**Phone Interaction**:
+- When within 3 units of a phone, "Press E to answer" prompt appears in the HUD
+- Pressing E triggers phone pickup sound (loaded from external URL), stops phone ringing
+- Screen fades to black over 2 seconds via `FADE_SHADER` post-processing pass
+- Game resets to start screen after fade completes, allowing replay
+
 **Wake-up Effect**:
 - When the game starts, a shader-based eye-opening effect plays (2 seconds)
 - Simulates regaining consciousness with blinking/struggling to open eyes
@@ -70,15 +76,15 @@ npm run preview  # Preview production build
 
 **Sanity System**:
 - Sanity drains over time while the player is moving
-- Drain rate accelerates at lower sanity thresholds (0.15/sec base, up to 0.6/sec at critical levels)
+- Drain rate accelerates at lower sanity thresholds (0.195/sec base, up to 0.78/sec at critical levels)
 - HUD rendered in Three.js using a separate orthographic scene (`hudScene`/`hudCamera`) with canvas textures for text
 - Sanity bar with "SANITY" label and percentage, color changes at low levels (yellow → orange → red)
 - Pulsing effect on the bar at critical sanity levels
 - Progressive visual distortion effects at different sanity thresholds:
-  - **80%**: Subtle wave distortion (drain: 0.2/sec)
-  - **50%**: Chromatic aberration, stronger waves, green tint (drain: 0.25/sec)
-  - **30%**: Tunnel vision, pulsing, spiral distortion, color cycling, double vision (drain: 0.4/sec)
-  - **10%**: Screen shake, reality fracturing, kaleidoscope effect, color inversion flashes, scan lines (drain: 0.6/sec)
+  - **80%**: Subtle wave distortion (drain: 0.26/sec)
+  - **50%**: Chromatic aberration, stronger waves, green tint (drain: 0.325/sec)
+  - **30%**: Tunnel vision, pulsing, spiral distortion, color cycling, double vision (drain: 0.52/sec)
+  - **10%**: Screen shake, reality fracturing, kaleidoscope effect, color inversion flashes, scan lines (drain: 0.78/sec)
 
 **Mobile/Touch Support**:
 - Automatic detection of touch devices (iOS, Android)
