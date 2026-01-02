@@ -17,6 +17,15 @@ let phoneRingSource = null;
 let phoneRingGainNode = null;
 let phonePickupBuffer = null;
 
+// Global distortion chain nodes
+let masterDistortion = null;
+let masterFilter = null;
+let masterDelay = null;
+let masterDelayGain = null;
+let masterDryGain = null;
+let masterOutput = null;
+let currentSanityFactor = 0;
+
 // Export state getters
 export function getAudioContext() {
     return audioCtx;
@@ -29,8 +38,98 @@ export function getKidsLaughBuffer() {
 export function initAudioContext() {
     if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        initMasterDistortionChain();
     }
     return audioCtx;
+}
+
+function initMasterDistortionChain() {
+    if (!audioCtx || masterOutput) return;
+
+    // Create master output gain node
+    masterOutput = audioCtx.createGain();
+    masterOutput.gain.value = 1.0;
+    masterOutput.connect(audioCtx.destination);
+
+    // Create dry path (unaffected signal)
+    masterDryGain = audioCtx.createGain();
+    masterDryGain.gain.value = 1.0;
+    masterDryGain.connect(masterOutput);
+
+    // Create distortion
+    masterDistortion = audioCtx.createWaveShaper();
+    masterDistortion.curve = makeDistortionCurve(0);
+    masterDistortion.oversample = '4x';
+
+    // Create filter for muffling at low sanity
+    masterFilter = audioCtx.createBiquadFilter();
+    masterFilter.type = 'lowpass';
+    masterFilter.frequency.value = 22000;
+    masterFilter.Q.value = 1;
+
+    // Create delay for echo effect
+    masterDelay = audioCtx.createDelay();
+    masterDelay.delayTime.value = 0;
+    masterDelayGain = audioCtx.createGain();
+    masterDelayGain.gain.value = 0;
+
+    // Connect wet path: distortion -> filter -> output
+    masterDistortion.connect(masterFilter);
+    masterFilter.connect(masterOutput);
+    masterFilter.connect(masterDelay);
+    masterDelay.connect(masterDelayGain);
+    masterDelayGain.connect(masterOutput);
+}
+
+/**
+ * Get the master output node for routing sounds through distortion
+ * @returns {AudioNode} The node to connect sounds to
+ */
+export function getMasterOutput() {
+    return masterDryGain || (audioCtx ? audioCtx.destination : null);
+}
+
+/**
+ * Get the distorted output node for routing sounds through distortion effects
+ * @returns {AudioNode} The distortion input node
+ */
+export function getDistortedOutput() {
+    return masterDistortion || getMasterOutput();
+}
+
+/**
+ * Update the master distortion chain based on sanity level
+ * @param {number} sanity - Current sanity (0-100)
+ * @param {number} debugSanityOverride - Debug override index (-1 for none)
+ */
+export function updateMasterDistortion(sanity, debugSanityOverride) {
+    if (!audioCtx || !masterDistortion) return;
+
+    const effectiveSanity = debugSanityOverride >= 0 ? DEBUG_SANITY_LEVELS[debugSanityOverride] : sanity;
+
+    // Calculate sanity factor (0 at 100% sanity, 1 at 0% sanity)
+    // Start distortion at 50% sanity
+    if (effectiveSanity > 50) {
+        currentSanityFactor = 0;
+    } else {
+        currentSanityFactor = 1 - (effectiveSanity / 50);
+    }
+
+    // Update distortion curve
+    const distortionAmount = currentSanityFactor * 30;
+    masterDistortion.curve = makeDistortionCurve(distortionAmount);
+
+    // Update filter (muffle sounds at low sanity)
+    const filterFreq = 22000 - currentSanityFactor * 18000; // 22000 -> 4000 Hz
+    masterFilter.frequency.setTargetAtTime(filterFreq, audioCtx.currentTime, 0.1);
+    masterFilter.Q.setTargetAtTime(1 + currentSanityFactor * 8, audioCtx.currentTime, 0.1);
+
+    // Update delay/echo
+    masterDelay.delayTime.setTargetAtTime(0.05 + currentSanityFactor * 0.12, audioCtx.currentTime, 0.1);
+    masterDelayGain.gain.setTargetAtTime(currentSanityFactor * 0.35, audioCtx.currentTime, 0.1);
+
+    // Balance dry/wet mix
+    masterDryGain.gain.setTargetAtTime(1 - currentSanityFactor * 0.3, audioCtx.currentTime, 0.1);
 }
 
 export function resumeAudioContext() {
@@ -77,7 +176,7 @@ function startHumSound() {
     humGainNode.gain.value = 0.12;
 
     humSource.connect(humGainNode);
-    humGainNode.connect(audioCtx.destination);
+    humGainNode.connect(getDistortedOutput());
     humSource.start();
 }
 
@@ -92,7 +191,7 @@ function startPhoneRingSound() {
     phoneRingGainNode.gain.value = 0;
 
     phoneRingSource.connect(phoneRingGainNode);
-    phoneRingGainNode.connect(audioCtx.destination);
+    phoneRingGainNode.connect(getDistortedOutput());
     phoneRingSource.start();
 }
 
@@ -189,7 +288,7 @@ export function playPhonePickup() {
         gainNode.gain.value = 0.8;
 
         source.connect(gainNode);
-        gainNode.connect(audioCtx.destination);
+        gainNode.connect(getDistortedOutput());
         source.start();
     }
 }
@@ -217,7 +316,7 @@ export function playAmbientFootsteps(isStarted) {
     source.connect(filter);
     filter.connect(gainNode);
     gainNode.connect(panner);
-    panner.connect(audioCtx.destination);
+    panner.connect(getDistortedOutput());
 
     source.start();
 
@@ -292,7 +391,7 @@ export function playAmbientDoorClose(isStarted, playerSanity, debugSanityOverrid
         delay.connect(delayGain);
         delayGain.connect(gainNode);
         gainNode.connect(panner);
-        panner.connect(audioCtx.destination);
+        panner.connect(getDistortedOutput());
     } else {
         gainNode.gain.value = 0.2 + Math.random() * 0.4;
 
@@ -303,7 +402,7 @@ export function playAmbientDoorClose(isStarted, playerSanity, debugSanityOverrid
         source.connect(filter);
         filter.connect(gainNode);
         gainNode.connect(panner);
-        panner.connect(audioCtx.destination);
+        panner.connect(getDistortedOutput());
     }
 
     source.start();
