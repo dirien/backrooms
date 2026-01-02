@@ -50,7 +50,7 @@ The codebase is organized into separate modules:
 - `footsteps.mp3`: Random distant footsteps
 - `door-close.mp3`: Random distant door closing (replaced by kids laughing when sanity ≤ 50%)
 - `kids-laugh.mp3`: Creepy kids laughing sound that replaces door sounds at low sanity
-- `phone-ring.mp3`: Phone ringing sound, loops when player is within 3 chunks of a wall phone (volume uses cubic falloff - very quiet far away, loud only when very close)
+- `phone-ring.mp3`: Phone ringing sound, loops when player is within 2 chunks of a wall phone (volume uses cubic falloff - very quiet far away, loud only when very close)
 
 **Graphics** (`public/graphics/`):
 - `wallpaper.png`: Wall texture using Backrooms color palette
@@ -59,7 +59,7 @@ The codebase is organized into separate modules:
 
 **3D Models** (`public/models/`):
 - `wall_outlet_american.glb`: American-style wall outlet, randomly placed on walls (5% chance per wall)
-- `corded_public_phone_-_low_poly.glb`: Corded public phone, very rarely placed on walls (0.5% chance per wall). Phones never spawn within 4 chunks of the starting position (0,0) to force players to explore deeper into the Backrooms
+- `corded_public_phone_-_low_poly.glb`: Corded public phone, very rarely placed on walls (0.5% chance per wall). Phones never spawn within 6 chunks of the starting position (0,0) to force players to explore deeper into the Backrooms
 - `bacteria_-_kane_pixels_backrooms.glb`: Bacteria entity (Kane Pixels style) that appears at low sanity levels as a horror element
 
 **Floor/Ceiling System**:
@@ -75,7 +75,7 @@ The codebase is organized into separate modules:
 **Game Objective**:
 - Find a telephone hidden deep in the Backrooms and call for help before sanity drains completely
 - Start screen displays the objective to the player
-- Phones only spawn 4+ chunks away from the starting position, requiring exploration
+- Phones only spawn 6+ chunks away from the starting position, requiring exploration
 
 **Phone Interaction**:
 - When within 3 units of a phone, "Press E to answer" prompt appears in the HUD (or "Tap to answer" on mobile)
