@@ -19,7 +19,8 @@ import {
     playPhonePickup,
     playAmbientFootsteps,
     playAmbientDoorClose,
-    getKidsLaughBuffer
+    getKidsLaughBuffer,
+    updateMasterDistortion
 } from './audio.js';
 import {
     createHUD,
@@ -331,6 +332,9 @@ function animate() {
 
         updateHUDSanity(playerSanity);
     }
+
+    // Update master audio distortion based on sanity
+    updateMasterDistortion(playerSanity, debugSanityOverride);
 
     const resources = getResources();
     updateChunks(camera, scene, chunks, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes);

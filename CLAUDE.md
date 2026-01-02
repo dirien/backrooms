@@ -104,8 +104,8 @@ The codebase is organized into separate modules:
   - **10%**: Screen shake, reality fracturing, kaleidoscope effect, color inversion flashes, scan lines (drain: 1.348/sec)
 - Audio horror effects at low sanity (≤ 50%):
   - Door close sounds replaced with creepy kids laughing
-  - Audio distortion increases as sanity decreases (pitch shift, waveshaping, filtering)
-  - Echo/delay effects become more pronounced at lower sanity
+  - **Master audio distortion**: All sounds (hum, footsteps, phone ring, phone pickup, door/laugh sounds) pass through a global distortion chain that activates below 50% sanity
+  - Audio distortion increases as sanity decreases (waveshaping, low-pass filtering, echo/delay)
   - Sound frequency increases (plays more often) as sanity drops
 - Visual horror effects - Bacteria entity appearances (see Bacteria Entity System below)
 
