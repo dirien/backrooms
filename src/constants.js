@@ -7,14 +7,14 @@ export const CHUNK_SIZE = 24;
 export const RENDER_DIST = 2;
 export const PRELOAD_DIST = 4;
 export const PLAYER_RADIUS = 0.5;
-export const PHONE_EXCLUSION_DIST = 4;
+export const PHONE_EXCLUSION_DIST = 6;
 
 // Entity system
 export const ENTITY_DISAPPEAR_DISTANCE = 8;
 
 // Audio
 export const PHONE_AUDIO_CLOSE_DIST = 5;
-export const PHONE_AUDIO_MAX_DIST = CHUNK_SIZE * 3;
+export const PHONE_AUDIO_MAX_DIST = CHUNK_SIZE * 2;
 export const PHONE_INTERACT_DIST = 3;
 
 // Animation timing
