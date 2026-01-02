@@ -17,6 +17,15 @@ let phoneRingSource = null;
 let phoneRingGainNode = null;
 let phonePickupBuffer = null;
 
+// Kids laugh looping sound
+let kidsLaughSource = null;
+let kidsLaughGainNode = null;
+let kidsLaughDistortion = null;
+let kidsLaughFilter = null;
+let kidsLaughDelay = null;
+let kidsLaughDelayGain = null;
+let isKidsLaughPlaying = false;
+
 // Global distortion chain nodes
 let masterDistortion = null;
 let masterFilter = null;
@@ -195,6 +204,58 @@ function startPhoneRingSound() {
     phoneRingSource.start();
 }
 
+function restartHumSound() {
+    if (!humBuffer || !audioCtx) return;
+
+    // Stop existing source if any
+    if (humSource) {
+        try {
+            humSource.stop();
+        } catch (e) {
+            // Already stopped
+        }
+    }
+
+    humSource = audioCtx.createBufferSource();
+    humSource.buffer = humBuffer;
+    humSource.loop = true;
+
+    if (!humGainNode) {
+        humGainNode = audioCtx.createGain();
+        humGainNode.connect(getDistortedOutput());
+    }
+    humGainNode.gain.value = 0.12;
+
+    humSource.connect(humGainNode);
+    humSource.start();
+}
+
+function restartPhoneRingSound() {
+    if (!phoneRingBuffer || !audioCtx) return;
+
+    // Stop existing source if any
+    if (phoneRingSource) {
+        try {
+            phoneRingSource.stop();
+        } catch (e) {
+            // Already stopped
+        }
+    }
+
+    phoneRingSource = audioCtx.createBufferSource();
+    phoneRingSource.buffer = phoneRingBuffer;
+    phoneRingSource.loop = true;
+
+    if (!phoneRingGainNode) {
+        phoneRingGainNode = audioCtx.createGain();
+        phoneRingGainNode.connect(getDistortedOutput());
+    }
+    phoneRingGainNode.gain.value = 0;
+
+    phoneRingSource.connect(phoneRingGainNode);
+    phoneRingSource.start();
+}
+
 export async function loadPhonePickupSound() {
     try {
         const response = await fetch('https://cdn.pixabay.com/download/audio/2022/03/10/audio_6650ed59b7.mp3?filename=phone-pick-up-46796.mp3');
@@ -279,6 +340,147 @@ export function stopPhoneRing() {
     }
 }
 
+/**
+ * Fade all audio to silence over the specified duration, then stop all sounds
+ * @param {number} duration - Fade duration in seconds
+ */
+export function fadeAllAudioToSilence(duration) {
+    if (!audioCtx) return;
+
+    const currentTime = audioCtx.currentTime;
+    const fadeEndTime = currentTime + duration;
+
+    // Fade hum to silence
+    if (humGainNode) {
+        humGainNode.gain.setValueAtTime(humGainNode.gain.value, currentTime);
+        humGainNode.gain.linearRampToValueAtTime(0, fadeEndTime);
+    }
+
+    // Fade phone ring to silence
+    if (phoneRingGainNode) {
+        phoneRingGainNode.gain.setValueAtTime(phoneRingGainNode.gain.value, currentTime);
+        phoneRingGainNode.gain.linearRampToValueAtTime(0, fadeEndTime);
+    }
+
+    // Fade kids laugh to silence
+    if (kidsLaughGainNode) {
+        kidsLaughGainNode.gain.setValueAtTime(kidsLaughGainNode.gain.value, currentTime);
+        kidsLaughGainNode.gain.linearRampToValueAtTime(0, fadeEndTime);
+    }
+
+    // Fade master output to silence
+    if (masterOutput) {
+        masterOutput.gain.setValueAtTime(masterOutput.gain.value, currentTime);
+        masterOutput.gain.linearRampToValueAtTime(0, fadeEndTime);
+    }
+
+    // Schedule stopping all sounds after fade completes
+    setTimeout(() => {
+        stopAllSounds();
+    }, duration * 1000);
+}
+
+/**
+ * Stop all currently playing sounds
+ */
+export function stopAllSounds() {
+    // Stop hum sound
+    if (humSource) {
+        try {
+            humSource.stop();
+        } catch (e) {
+            // Already stopped
+        }
+        humSource = null;
+    }
+
+    // Stop phone ring sound
+    if (phoneRingSource) {
+        try {
+            phoneRingSource.stop();
+        } catch (e) {
+            // Already stopped
+        }
+        phoneRingSource = null;
+    }
+
+    // Stop kids laugh sound
+    if (kidsLaughSource) {
+        try {
+            kidsLaughSource.stop();
+        } catch (e) {
+            // Already stopped
+        }
+        kidsLaughSource = null;
+    }
+    isKidsLaughPlaying = false;
+
+    // Reset gain nodes to zero
+    if (humGainNode) {
+        humGainNode.gain.value = 0;
+    }
+    if (phoneRingGainNode) {
+        phoneRingGainNode.gain.value = 0;
+    }
+    if (kidsLaughGainNode) {
+        kidsLaughGainNode.gain.value = 0;
+    }
+    if (masterOutput) {
+        masterOutput.gain.value = 0;
+    }
+}
+
+/**
+ * Reset audio state for start screen (no sounds playing)
+ */
+export function resetAudioForStartScreen() {
+    if (!audioCtx) return;
+
+    // Make sure all sounds are stopped
+    stopAllSounds();
+
+    // Reset distortion parameters
+    currentSanityFactor = 0;
+    if (masterDistortion) {
+        masterDistortion.curve = makeDistortionCurve(0);
+    }
+    if (masterFilter) {
+        masterFilter.frequency.value = 22000;
+        masterFilter.Q.value = 1;
+    }
+    if (masterDelay) {
+        masterDelay.delayTime.value = 0;
+    }
+    if (masterDelayGain) {
+        masterDelayGain.gain.value = 0;
+    }
+    if (masterDryGain) {
+        masterDryGain.gain.value = 1.0;
+    }
+}
+
+/**
+ * Start all game audio when game begins
+ */
+export function startGameAudio() {
+    if (!audioCtx) return;
+
+    // Reset master output
+    if (masterOutput) {
+        masterOutput.gain.value = 1.0;
+    }
+
+    // Restart hum sound
+    if (humBuffer) {
+        restartHumSound();
+    }
+
+    // Restart phone ring sound
+    if (phoneRingBuffer) {
+        restartPhoneRingSound();
+    }
+}
+
 export function playPhonePickup() {
     if (phonePickupBuffer && audioCtx) {
         const source = audioCtx.createBufferSource();
@@ -335,82 +537,165 @@ function makeDistortionCurve(amount) {
     return curve;
 }
 
+/**
+ * Start the kids laugh looping sound (called once when sanity drops to 50%)
+ */
+function startKidsLaughLoop() {
+    if (!kidsLaughBuffer || !audioCtx || isKidsLaughPlaying) return;
+
+    isKidsLaughPlaying = true;
+
+    kidsLaughSource = audioCtx.createBufferSource();
+    kidsLaughSource.buffer = kidsLaughBuffer;
+    kidsLaughSource.loop = true;
+
+    // Create gain node
+    kidsLaughGainNode = audioCtx.createGain();
+    kidsLaughGainNode.gain.value = 0.15;
+
+    // Create distortion
+    kidsLaughDistortion = audioCtx.createWaveShaper();
+    kidsLaughDistortion.curve = makeDistortionCurve(0);
+    kidsLaughDistortion.oversample = '4x';
+
+    // Create filter
+    kidsLaughFilter = audioCtx.createBiquadFilter();
+    kidsLaughFilter.type = 'bandpass';
+    kidsLaughFilter.frequency.value = 1000;
+    kidsLaughFilter.Q.value = 2;
+
+    // Create delay for echo effect
+    kidsLaughDelay = audioCtx.createDelay();
+    kidsLaughDelay.delayTime.value = 0.1;
+    kidsLaughDelayGain = audioCtx.createGain();
+    kidsLaughDelayGain.gain.value = 0.2;
+
+    // Connect: source -> distortion -> filter -> gain -> output
+    //                                  filter -> delay -> delayGain -> gain
+    kidsLaughSource.connect(kidsLaughDistortion);
+    kidsLaughDistortion.connect(kidsLaughFilter);
+    kidsLaughFilter.connect(kidsLaughGainNode);
+    kidsLaughFilter.connect(kidsLaughDelay);
+    kidsLaughDelay.connect(kidsLaughDelayGain);
+    kidsLaughDelayGain.connect(kidsLaughGainNode);
+    kidsLaughGainNode.connect(getDistortedOutput());
+
+    kidsLaughSource.start();
+    console.log('Kids laugh loop started');
+}
+
+/**
+ * Stop the kids laugh looping sound
+ */
+function stopKidsLaughLoop() {
+    if (kidsLaughSource) {
+        try {
+            kidsLaughSource.stop();
+        } catch (e) {
+            // Already stopped
+        }
+        kidsLaughSource = null;
+    }
+    isKidsLaughPlaying = false;
+}
+
+/**
+ * Update kids laugh sound effects based on sanity level
+ * @param {number} sanity - Current sanity (0-100)
+ * @param {number} debugSanityOverride - Debug override index (-1 for none)
+ */
+export function updateKidsLaughDistortion(sanity, debugSanityOverride) {
+    const effectiveSanity = debugSanityOverride >= 0 ? DEBUG_SANITY_LEVELS[debugSanityOverride] : sanity;
+
+    // Start kids laugh when sanity drops to 50% or below
+    if (effectiveSanity <= 50 && kidsLaughBuffer && !isKidsLaughPlaying) {
+        startKidsLaughLoop();
+    }
+
+    // Stop kids laugh if sanity goes above 50% (e.g., in debug mode)
+    if (effectiveSanity > 50 && isKidsLaughPlaying) {
+        stopKidsLaughLoop();
+    }
+
+    // Update distortion parameters if playing
+    if (!isKidsLaughPlaying || !audioCtx) return;
+
+    // sanityFactor: 0 at 50% sanity, 1 at 0% sanity
+    const sanityFactor = 1 - (effectiveSanity / 50);
+
+    // Update gain (louder at lower sanity)
+    if (kidsLaughGainNode) {
+        const targetGain = 0.15 + sanityFactor * 0.5;
+        kidsLaughGainNode.gain.setTargetAtTime(targetGain, audioCtx.currentTime, 0.3);
+    }
+
+    // Update distortion (more distorted at lower sanity)
+    if (kidsLaughDistortion) {
+        const distortionAmount = sanityFactor * 50;
+        kidsLaughDistortion.curve = makeDistortionCurve(distortionAmount);
+    }
+
+    // Update filter (more muffled/creepy at lower sanity)
+    if (kidsLaughFilter) {
+        if (effectiveSanity <= 20) {
+            kidsLaughFilter.type = 'lowpass';
+            kidsLaughFilter.frequency.setTargetAtTime(600 + (1 - sanityFactor) * 400, audioCtx.currentTime, 0.3);
+            kidsLaughFilter.Q.setTargetAtTime(5 + sanityFactor * 10, audioCtx.currentTime, 0.3);
+        } else {
+            kidsLaughFilter.type = 'bandpass';
+            kidsLaughFilter.frequency.setTargetAtTime(800 + (1 - sanityFactor) * 400, audioCtx.currentTime, 0.3);
+            kidsLaughFilter.Q.setTargetAtTime(2 + sanityFactor * 5, audioCtx.currentTime, 0.3);
+        }
+    }
+
+    // Update delay (more echo at lower sanity)
+    if (kidsLaughDelay) {
+        kidsLaughDelay.delayTime.setTargetAtTime(0.1 + sanityFactor * 0.15, audioCtx.currentTime, 0.3);
+    }
+    if (kidsLaughDelayGain) {
+        kidsLaughDelayGain.gain.setTargetAtTime(0.2 + sanityFactor * 0.3, audioCtx.currentTime, 0.3);
+    }
+
+    // Update playback rate (slower/creepier at lower sanity)
+    if (kidsLaughSource) {
+        const basePitch = 1.0 - sanityFactor * 0.3;
+        kidsLaughSource.playbackRate.setTargetAtTime(basePitch, audioCtx.currentTime, 0.3);
+    }
+}
+
 export function playAmbientDoorClose(isStarted, playerSanity, debugSanityOverride) {
     if (!isStarted || !audioCtx || !doorCloseBuffer) {
-        setTimeout(() => playAmbientDoorClose(isStarted, playerSanity, debugSanityOverride), 2000);
-        return;
+        return 15000 + Math.random() * 25000;
     }
     if (audioCtx.state === 'suspended') audioCtx.resume();
 
     const effectiveSanity = debugSanityOverride >= 0 ? DEBUG_SANITY_LEVELS[debugSanityOverride] : playerSanity;
-    const useKidsLaugh = effectiveSanity <= 50 && kidsLaughBuffer;
 
-    console.log('playAmbientDoorClose - sanity:', effectiveSanity, '%, useKidsLaugh:', useKidsLaugh, ', kidsLaughBuffer:', !!kidsLaughBuffer);
-
+    // Only play door sounds (kids laugh is now a continuous loop handled separately)
     const source = audioCtx.createBufferSource();
-    source.buffer = useKidsLaugh ? kidsLaughBuffer : doorCloseBuffer;
+    source.buffer = doorCloseBuffer;
 
     const panner = audioCtx.createStereoPanner();
     panner.pan.value = (Math.random() * 2) - 1;
 
     const gainNode = audioCtx.createGain();
+    gainNode.gain.value = 0.2 + Math.random() * 0.4;
 
-    if (useKidsLaugh) {
-        const sanityFactor = 1 - (effectiveSanity / 50);
-        gainNode.gain.value = 0.15 + sanityFactor * 0.5 + Math.random() * 0.2;
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 400 + Math.random() * 600;
 
-        const basePitch = 1.0 - sanityFactor * 0.3;
-        const pitchVariation = (Math.random() - 0.5) * 0.2 * (1 + sanityFactor);
-        source.playbackRate.value = basePitch + pitchVariation;
-
-        const distortion = audioCtx.createWaveShaper();
-        const distortionAmount = sanityFactor * 50;
-        distortion.curve = makeDistortionCurve(distortionAmount);
-        distortion.oversample = '4x';
-
-        const filter = audioCtx.createBiquadFilter();
-        if (effectiveSanity <= 20) {
-            filter.type = 'lowpass';
-            filter.frequency.value = 600 + Math.random() * 400;
-            filter.Q.value = 5 + sanityFactor * 10;
-        } else {
-            filter.type = 'bandpass';
-            filter.frequency.value = 800 + Math.random() * 600;
-            filter.Q.value = 2 + sanityFactor * 5;
-        }
-
-        const delay = audioCtx.createDelay();
-        delay.delayTime.value = 0.1 + sanityFactor * 0.15;
-        const delayGain = audioCtx.createGain();
-        delayGain.gain.value = 0.2 + sanityFactor * 0.3;
-
-        source.connect(distortion);
-        distortion.connect(filter);
-        filter.connect(gainNode);
-        filter.connect(delay);
-        delay.connect(delayGain);
-        delayGain.connect(gainNode);
-        gainNode.connect(panner);
-        panner.connect(getDistortedOutput());
-    } else {
-        gainNode.gain.value = 0.2 + Math.random() * 0.4;
-
-        const filter = audioCtx.createBiquadFilter();
-        filter.type = 'lowpass';
-        filter.frequency.value = 400 + Math.random() * 600;
-
-        source.connect(filter);
-        filter.connect(gainNode);
-        gainNode.connect(panner);
-        panner.connect(getDistortedOutput());
-    }
+    source.connect(filter);
+    filter.connect(gainNode);
+    gainNode.connect(panner);
+    panner.connect(getDistortedOutput());
 
     source.start();
 
+    // Door sounds play less frequently at low sanity (kids laugh takes over)
     let nextDoor;
-    if (useKidsLaugh) {
-        const sanityFactor = 1 - (effectiveSanity / 50);
-        nextDoor = (12000 - sanityFactor * 8000) + Math.random() * (13000 - sanityFactor * 8000);
+    if (effectiveSanity <= 50) {
+        nextDoor = 25000 + Math.random() * 35000; // Less frequent when kids laugh is playing
     } else {
         nextDoor = 15000 + Math.random() * 25000;
     }

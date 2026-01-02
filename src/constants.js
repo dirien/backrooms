@@ -20,6 +20,7 @@ export const PHONE_INTERACT_DIST = 3;
 // Animation timing
 export const WAKEUP_DURATION = 2.0;
 export const FADE_DURATION = 2.0;
+export const GAME_OVER_DELAY = 1.5; // Delay after fade to black before restart
 
 // Debug sanity levels for testing
 export const DEBUG_SANITY_LEVELS = [100, 80, 50, 30, 10, 0];
