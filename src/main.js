@@ -5,7 +5,7 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
 // Import modules
-import { CHUNK_SIZE, PLAYER_RADIUS, WAKEUP_DURATION, FADE_DURATION, DEBUG_SANITY_LEVELS, PHONE_INTERACT_DIST } from './constants.js';
+import { CHUNK_SIZE, PLAYER_RADIUS, WAKEUP_DURATION, FADE_DURATION, GAME_OVER_DELAY, DEBUG_SANITY_LEVELS, PHONE_INTERACT_DIST } from './constants.js';
 import { POST_SHADER, FADE_SHADER, WAKEUP_SHADER } from './shaders/index.js';
 import {
     initAudioContext,
@@ -19,8 +19,11 @@ import {
     playPhonePickup,
     playAmbientFootsteps,
     playAmbientDoorClose,
-    getKidsLaughBuffer,
-    updateMasterDistortion
+    updateMasterDistortion,
+    updateKidsLaughDistortion,
+    fadeAllAudioToSilence,
+    resetAudioForStartScreen,
+    startGameAudio
 } from './audio.js';
 import {
     createHUD,
@@ -79,6 +82,7 @@ let chunkBorders = [];
 let debugSanityOverride = -1;
 let nearestPhoneDist = Infinity;
 let isInteractingWithPhone = false;
+let isSanityGameOver = false;
 
 // Raycaster for mobile phone tap interaction
 let raycaster = new THREE.Raycaster();
@@ -129,11 +133,6 @@ function cycleSanityLevel(direction) {
 
     playerSanity = DEBUG_SANITY_LEVELS[debugSanityOverride];
     console.log('Debug sanity level:', playerSanity + '%');
-
-    if (playerSanity <= 50 && getKidsLaughBuffer()) {
-        console.log('Triggering kids laugh sound for testing (sanity: ' + playerSanity + '%)');
-        scheduleAmbientDoorClose();
-    }
 }
 
 function interactWithPhone() {
@@ -202,8 +201,12 @@ function resetGameState() {
 
     isStarted = false;
     isInteractingWithPhone = false;
+    isSanityGameOver = false;
     playerSanity = 100;
     fadeStartTime = -1;
+
+    // Reset audio for start screen (all sounds stopped)
+    resetAudioForStartScreen();
 
     if (camera) {
         camera.position.set(0, 1.7, 0);
@@ -328,6 +331,16 @@ function animate() {
             }
             playerSanity -= delta * drainRate;
             playerSanity = Math.max(0, playerSanity);
+
+            // Trigger game over when sanity reaches zero
+            if (playerSanity <= 0 && !isSanityGameOver && !isInteractingWithPhone) {
+                isSanityGameOver = true;
+                fadeAllAudioToSilence(FADE_DURATION);
+                if (fadePass) {
+                    fadePass.enabled = true;
+                    fadeStartTime = performance.now();
+                }
+            }
         }
 
         updateHUDSanity(playerSanity);
@@ -335,6 +348,9 @@ function animate() {
 
     // Update master audio distortion based on sanity
     updateMasterDistortion(playerSanity, debugSanityOverride);
+
+    // Update kids laugh sound (starts at 50% sanity, gets more distorted as sanity drops)
+    updateKidsLaughDistortion(playerSanity, debugSanityOverride);
 
     const resources = getResources();
     updateChunks(camera, scene, chunks, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes);
@@ -388,12 +404,15 @@ function animate() {
     // Update fade to black animation
     if (fadePass && fadeStartTime >= 0) {
         const elapsed = (performance.now() - fadeStartTime) / 1000;
-        const progress = Math.min(elapsed / FADE_DURATION, 1.0);
 
-        const eased = progress * progress;
+        // For sanity game over, add delay after fade completes
+        const totalDuration = isSanityGameOver ? FADE_DURATION + GAME_OVER_DELAY : FADE_DURATION;
+        const fadeProgress = Math.min(elapsed / FADE_DURATION, 1.0);
+
+        const eased = fadeProgress * fadeProgress;
         fadePass.uniforms.fadeAmount.value = eased;
 
-        if (progress >= 1.0) {
+        if (elapsed >= totalDuration) {
             resetGameState();
         }
     }
@@ -448,6 +467,7 @@ async function initGame() {
         fadePass.uniforms.fadeAmount.value = 0.0;
 
         resumeAudioContext();
+        startGameAudio();
 
         isStarted = true;
         const resources = getResources();

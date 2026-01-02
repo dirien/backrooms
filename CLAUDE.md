@@ -48,8 +48,8 @@ The codebase is organized into separate modules:
 **Audio files** (`public/sounds/`):
 - `light-hum.mp3`: Looping fluorescent light buzz
 - `footsteps.mp3`: Random distant footsteps
-- `door-close.mp3`: Random distant door closing (replaced by kids laughing when sanity ≤ 50%)
-- `kids-laugh.mp3`: Creepy kids laughing sound that replaces door sounds at low sanity
+- `door-close.mp3`: Random distant door closing
+- `kids-laugh.mp3`: Creepy kids laughing sound that starts looping continuously when sanity drops to 50%, getting progressively more distorted as sanity decreases
 - `phone-ring.mp3`: Phone ringing sound, loops when player is within 2 chunks of a wall phone (volume uses cubic falloff - very quiet far away, loud only when very close)
 
 **Graphics** (`public/graphics/`):
@@ -70,7 +70,7 @@ The codebase is organized into separate modules:
 - Toggles visibility of wall normal debug lines (red)
 - Toggles chunk border visualization (transparent red walls at chunk boundaries)
 - Press `N`/`M` to cycle through sanity levels (100%, 80%, 50%, 30%, 10%, 0%) for testing distortion effects
-- When cycling to 50% or below, kids laughing sound plays immediately for testing audio horror effects
+- Kids laughing sound automatically starts/stops based on sanity level (starts at 50%, stops above 50%)
 
 **Game Objective**:
 - Find a telephone hidden deep in the Backrooms and call for help before sanity drains completely
@@ -103,11 +103,11 @@ The codebase is organized into separate modules:
   - **30%**: Tunnel vision, pulsing, spiral distortion, color cycling, double vision (drain: 0.899/sec)
   - **10%**: Screen shake, reality fracturing, kaleidoscope effect, color inversion flashes, scan lines (drain: 1.348/sec)
 - Audio horror effects at low sanity (≤ 50%):
-  - Door close sounds replaced with creepy kids laughing
-  - **Master audio distortion**: All sounds (hum, footsteps, phone ring, phone pickup, door/laugh sounds) pass through a global distortion chain that activates below 50% sanity
+  - **Kids laugh loop**: Continuous looping kids laughing sound starts at 50% sanity with its own distortion chain (waveshaping, filtering, echo/delay, pitch shifting) that intensifies as sanity drops
+  - **Master audio distortion**: All sounds (hum, footsteps, phone ring, phone pickup, door sounds, kids laugh) pass through a global distortion chain that activates below 50% sanity
   - Audio distortion increases as sanity decreases (waveshaping, low-pass filtering, echo/delay)
-  - Sound frequency increases (plays more often) as sanity drops
 - Visual horror effects - Bacteria entity appearances (see Bacteria Entity System below)
+- **Game Over at 0% Sanity**: When sanity reaches zero, screen fades to black over 2 seconds while all audio fades to silence, followed by a 1.5 second delay before returning to the start screen
 
 **Mobile/Touch Support**:
 - Automatic detection of touch devices (iOS, Android)
