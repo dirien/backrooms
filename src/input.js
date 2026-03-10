@@ -15,6 +15,10 @@ let joystickActive = false;
 let joystickTouchId = null;
 let lookTouchId = null;
 let lastLookPos = { x: 0, y: 0 };
+let keyboardControlsInitialized = false;
+let mouseControlsInitialized = false;
+let touchControlsInitialized = false;
+let resumeAudioOnTouch = null;
 
 export function getMovementState() {
     return { moveForward, moveBackward, moveLeft, moveRight };
@@ -51,6 +55,12 @@ export function detectMobile() {
 }
 
 export function initKeyboardControls(onDebugToggle, onSanityCycle, onPhoneInteract) {
+    if (keyboardControlsInitialized) {
+        return;
+    }
+
+    keyboardControlsInitialized = true;
+
     document.addEventListener('keydown', (e) => {
         if (e.code === 'KeyW') moveForward = true;
         if (e.code === 'KeyA') moveLeft = true;
@@ -71,6 +81,12 @@ export function initKeyboardControls(onDebugToggle, onSanityCycle, onPhoneIntera
 }
 
 export function initMouseControls(renderer, camera, onInteraction) {
+    if (mouseControlsInitialized) {
+        return;
+    }
+
+    mouseControlsInitialized = true;
+
     document.addEventListener('mousedown', () => {
         if (!isMobile) {
             renderer.domElement.requestPointerLock();
@@ -99,13 +115,20 @@ export function initTouchControls(camera, onInteraction, onTapToInteract) {
 
     touchControls.classList.add('active');
 
+    if (touchControlsInitialized) {
+        return;
+    }
+
+    touchControlsInitialized = true;
+
     const joystickRect = joystickBase.getBoundingClientRect();
     const maxJoystickDist = joystickRect.width / 2 - 25;
 
     // One-time touch listener for audio context
-    document.addEventListener('touchstart', () => {
+    resumeAudioOnTouch = () => {
         if (onInteraction) onInteraction();
-    }, { once: true });
+    };
+    document.addEventListener('touchstart', resumeAudioOnTouch, { once: true });
 
     // Joystick touch handlers
     joystickZone.addEventListener('touchstart', (e) => {
@@ -193,14 +216,12 @@ export function initTouchControls(camera, onInteraction, onTapToInteract) {
                 // Check if this was a tap (short duration, minimal movement)
                 const dx = touch.clientX - lookTouchStartPos.x;
                 const dy = touch.clientY - lookTouchStartPos.y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
+                const dist = Math.hypot(dx, dy);
                 const duration = Date.now() - lookTouchStartTime;
 
                 if (dist < TAP_THRESHOLD_DIST && duration < TAP_THRESHOLD_TIME) {
                     // This was a tap - check for phone interaction
-                    if (onTapToInteract) {
-                        onTapToInteract(touch.clientX, touch.clientY);
-                    }
+                    if (onTapToInteract) onTapToInteract(touch.clientX, touch.clientY);
                 }
 
                 lookTouchId = null;
@@ -221,7 +242,7 @@ function updateJoystick(touchX, touchY, joystickBase, joystickStick, maxJoystick
 
     let dx = touchX - centerX;
     let dy = touchY - centerY;
-    const dist = Math.sqrt(dx * dx + dy * dy);
+    const dist = Math.hypot(dx, dy);
 
     if (dist > maxJoystickDist) {
         dx = (dx / dist) * maxJoystickDist;

@@ -5,148 +5,178 @@ import { CHUNK_SIZE, RENDER_DIST, PRELOAD_DIST, PHONE_EXCLUSION_DIST } from './c
  * World generation and chunk management
  */
 
-// Frustum for visibility checks
-let frustum = new THREE.Frustum();
-let frustumMatrix = new THREE.Matrix4();
+const frustum = new THREE.Frustum();
+const frustumMatrix = new THREE.Matrix4();
+const tempChunkBounds = new THREE.Box3();
+const tempChunkMin = new THREE.Vector3();
+const tempChunkMax = new THREE.Vector3();
+const tempWallBounds = new THREE.Box3();
+const tempShuffleArray = [];
 
-// Seeded random number generator for deterministic chunk generation
 function seededRandom(seed) {
-    let s = seed;
-    return function() {
-        s = (s * 1103515245 + 12345) & 0x7fffffff;
-        return s / 0x7fffffff;
+    let state = seed;
+    return () => {
+        state = (state * 1103515245 + 12345) & 0x7fffffff;
+        return state / 0x7fffffff;
     };
 }
 
-// Generate wall placement that guarantees connectivity (no dead ends)
-function generateWallGrid(cx, cz, gSize) {
-    const seed = ((cx * 73856093) ^ (cz * 19349663)) >>> 0;
-    const rng = seededRandom(seed);
-
-    const hWalls = [];
-    const vWalls = [];
-
-    for (let i = 0; i <= gSize; i++) {
-        hWalls[i] = [];
-        vWalls[i] = [];
-        for (let j = 0; j < gSize; j++) {
-            hWalls[i][j] = rng() > 0.45;
-            vWalls[i][j] = rng() > 0.45;
-        }
-    }
-
-    // Remove walls on chunk boundaries
-    for (let j = 0; j < gSize; j++) {
-        if (j === Math.floor(gSize / 2)) hWalls[gSize][j] = false;
-        if (j === Math.floor(gSize / 2)) hWalls[0][j] = false;
-        if (j === Math.floor(gSize / 2)) vWalls[gSize][j] = false;
-        if (j === Math.floor(gSize / 2)) vWalls[0][j] = false;
-    }
-
-    // Ensure each interior cell has at least 2 open sides
-    for (let z = 0; z < gSize; z++) {
-        for (let x = 0; x < gSize; x++) {
-            let openSides = 0;
-            const sides = [
-                { type: 'h', i: z + 1, j: x },
-                { type: 'h', i: z, j: x },
-                { type: 'v', i: x + 1, j: z },
-                { type: 'v', i: x, j: z }
-            ];
-
-            for (const side of sides) {
-                const walls = side.type === 'h' ? hWalls : vWalls;
-                if (!walls[side.i][side.j]) openSides++;
-            }
-
-            while (openSides < 2) {
-                const shuffled = [...sides].sort(() => rng() - 0.5);
-                for (const side of shuffled) {
-                    const walls = side.type === 'h' ? hWalls : vWalls;
-                    if (walls[side.i][side.j]) {
-                        walls[side.i][side.j] = false;
-                        openSides++;
-                        if (openSides >= 2) break;
-                    }
-                }
-            }
-        }
-    }
-
-    // Ensure no cell has more than 2 walls
-    for (let z = 0; z < gSize; z++) {
-        for (let x = 0; x < gSize; x++) {
-            let wallCount = 0;
-            const sides = [
-                { type: 'h', i: z + 1, j: x },
-                { type: 'h', i: z, j: x },
-                { type: 'v', i: x + 1, j: z },
-                { type: 'v', i: x, j: z }
-            ];
-
-            for (const side of sides) {
-                const walls = side.type === 'h' ? hWalls : vWalls;
-                if (walls[side.i][side.j]) wallCount++;
-            }
-
-            while (wallCount > 2) {
-                const shuffled = [...sides].sort(() => rng() - 0.5);
-                for (const side of shuffled) {
-                    const walls = side.type === 'h' ? hWalls : vWalls;
-                    if (walls[side.i][side.j]) {
-                        walls[side.i][side.j] = false;
-                        wallCount--;
-                        if (wallCount <= 2) break;
-                    }
-                }
-            }
-        }
-    }
-
-    return { hWalls, vWalls };
+function createCellSides(x, z) {
+    return [
+        { type: 'h', i: z + 1, j: x },
+        { type: 'h', i: z, j: x },
+        { type: 'v', i: x + 1, j: z },
+        { type: 'v', i: x, j: z },
+    ];
 }
 
-// Create a line showing a normal vector from a point
+function getWallArray(side, horizontalWalls, verticalWalls) {
+    return side.type === 'h' ? horizontalWalls : verticalWalls;
+}
+
+function countOpenSides(sides, horizontalWalls, verticalWalls) {
+    let openSides = 0;
+
+    for (const side of sides) {
+        const walls = getWallArray(side, horizontalWalls, verticalWalls);
+        if (!walls[side.i][side.j]) {
+            openSides++;
+        }
+    }
+
+    return openSides;
+}
+
+function countWalls(sides, horizontalWalls, verticalWalls) {
+    let wallCount = 0;
+
+    for (const side of sides) {
+        const walls = getWallArray(side, horizontalWalls, verticalWalls);
+        if (walls[side.i][side.j]) {
+            wallCount++;
+        }
+    }
+
+    return wallCount;
+}
+
+function getShuffledSides(sides, random) {
+    tempShuffleArray.length = 0;
+    tempShuffleArray.push(...sides);
+
+    for (let index = tempShuffleArray.length - 1; index > 0; index--) {
+        const swapIndex = Math.floor(random() * (index + 1));
+        [tempShuffleArray[index], tempShuffleArray[swapIndex]] = [tempShuffleArray[swapIndex], tempShuffleArray[index]];
+    }
+
+    return tempShuffleArray;
+}
+
+function openRandomWallsUntilBalanced(sides, horizontalWalls, verticalWalls, random, minOpenSides, maxWalls) {
+    let openSides = countOpenSides(sides, horizontalWalls, verticalWalls);
+    let wallCount = countWalls(sides, horizontalWalls, verticalWalls);
+
+    while (openSides < minOpenSides || wallCount > maxWalls) {
+        const shuffledSides = getShuffledSides(sides, random);
+
+        for (const side of shuffledSides) {
+            const walls = getWallArray(side, horizontalWalls, verticalWalls);
+            if (!walls[side.i][side.j]) {
+                continue;
+            }
+
+            walls[side.i][side.j] = false;
+            openSides++;
+            wallCount--;
+
+            if (openSides >= minOpenSides && wallCount <= maxWalls) {
+                return;
+            }
+        }
+    }
+}
+
+function removeBoundaryWalls(horizontalWalls, verticalWalls, gridSize) {
+    const midPoint = Math.floor(gridSize / 2);
+
+    for (let index = 0; index < gridSize; index++) {
+        if (index !== midPoint) {
+            continue;
+        }
+
+        horizontalWalls[gridSize][index] = false;
+        horizontalWalls[0][index] = false;
+        verticalWalls[gridSize][index] = false;
+        verticalWalls[0][index] = false;
+    }
+}
+
+function generateWallGrid(cx, cz, gridSize) {
+    const seed = ((cx * 73856093) ^ (cz * 19349663)) >>> 0;
+    const random = seededRandom(seed);
+    const horizontalWalls = [];
+    const verticalWalls = [];
+
+    for (let row = 0; row <= gridSize; row++) {
+        horizontalWalls[row] = [];
+        verticalWalls[row] = [];
+
+        for (let column = 0; column < gridSize; column++) {
+            horizontalWalls[row][column] = random() > 0.45;
+            verticalWalls[row][column] = random() > 0.45;
+        }
+    }
+
+    removeBoundaryWalls(horizontalWalls, verticalWalls, gridSize);
+
+    for (let z = 0; z < gridSize; z++) {
+        for (let x = 0; x < gridSize; x++) {
+            openRandomWallsUntilBalanced(createCellSides(x, z), horizontalWalls, verticalWalls, random, 2, 2);
+        }
+    }
+
+    return { horizontalWalls, verticalWalls };
+}
+
 function createNormalLine(origin, direction, material) {
     const points = [
         origin.clone(),
-        origin.clone().add(direction.clone().multiplyScalar(1.5))
+        origin.clone().add(direction.clone().multiplyScalar(1.5)),
     ];
     const geometry = new THREE.BufferGeometry().setFromPoints(points);
     return new THREE.Line(geometry, material);
 }
 
-// Create chunk border visualization
 export function createChunkBorder(cx, cz, debugMode) {
     const group = new THREE.Group();
-    const borderMat = new THREE.MeshBasicMaterial({
+    const borderMaterial = new THREE.MeshBasicMaterial({
         color: 0xff0000,
         transparent: true,
         opacity: 0.15,
         side: THREE.DoubleSide,
-        depthWrite: false
+        depthWrite: false,
     });
 
     const height = 3;
     const halfSize = CHUNK_SIZE / 2;
+    const northGeometry = new THREE.PlaneGeometry(CHUNK_SIZE, height);
+    const eastGeometry = new THREE.PlaneGeometry(CHUNK_SIZE, height);
 
-    const northGeo = new THREE.PlaneGeometry(CHUNK_SIZE, height);
-    const north = new THREE.Mesh(northGeo, borderMat);
+    const north = new THREE.Mesh(northGeometry, borderMaterial);
     north.position.set(0, height / 2, halfSize);
     group.add(north);
 
-    const south = new THREE.Mesh(northGeo, borderMat);
+    const south = new THREE.Mesh(northGeometry, borderMaterial);
     south.position.set(0, height / 2, -halfSize);
     south.rotation.y = Math.PI;
     group.add(south);
 
-    const eastGeo = new THREE.PlaneGeometry(CHUNK_SIZE, height);
-    const east = new THREE.Mesh(eastGeo, borderMat);
+    const east = new THREE.Mesh(eastGeometry, borderMaterial);
     east.position.set(halfSize, height / 2, 0);
     east.rotation.y = -Math.PI / 2;
     group.add(east);
 
-    const west = new THREE.Mesh(eastGeo, borderMat);
+    const west = new THREE.Mesh(eastGeometry, borderMaterial);
     west.position.set(-halfSize, height / 2, 0);
     west.rotation.y = Math.PI / 2;
     group.add(west);
@@ -157,249 +187,289 @@ export function createChunkBorder(cx, cz, debugMode) {
     return group;
 }
 
-export function generateChunk(cx, cz, scene, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes) {
-    const { wallMat, wallGeoV, wallGeoH, floorGeo, floorMat, ceilingGeo, ceilingMat, lightPanelGeo, lightPanelMat, outletModel, wallPhoneModel } = resources;
+function createChunkState() {
+    return {
+        border: null,
+        lightPanels: [],
+        phoneMeshes: [],
+        phonePositions: [],
+        raycastTargets: [],
+        walls: [],
+    };
+}
 
-    const group = new THREE.Group();
-    const seed = (cx * 12345) ^ (cz * 54321);
-    const rnd = (s) => (Math.abs(Math.sin(s) * 10000) % 1);
+function addStaticMesh(group, mesh, collection, options = {}) {
+    mesh.matrixAutoUpdate = false;
+    mesh.updateMatrix();
 
-    // Floor tile
-    const floor = new THREE.Mesh(floorGeo, floorMat);
+    if (options.castShadow) {
+        mesh.castShadow = true;
+    }
+
+    if (options.receiveShadow) {
+        mesh.receiveShadow = true;
+    }
+
+    group.add(mesh);
+    collection.push(mesh);
+    return mesh;
+}
+
+function addFloorAndCeiling(group, resources) {
+    const floor = new THREE.Mesh(resources.floorGeo, resources.floorMat);
     floor.rotation.x = -Math.PI / 2;
-    floor.position.set(0, 0, 0);
-    floor.matrixAutoUpdate = false;
-    floor.updateMatrix();
     floor.receiveShadow = true;
-    group.add(floor);
+    addStaticMesh(group, floor, [], { receiveShadow: true });
 
-    // Ceiling tile
-    const ceiling = new THREE.Mesh(ceilingGeo, ceilingMat);
+    const ceiling = new THREE.Mesh(resources.ceilingGeo, resources.ceilingMat);
     ceiling.rotation.x = Math.PI / 2;
     ceiling.position.set(0, 3.01, 0);
-    ceiling.matrixAutoUpdate = false;
-    ceiling.updateMatrix();
-    group.add(ceiling);
+    addStaticMesh(group, ceiling, []);
+}
 
-    // Generate wall placement grid
-    const gSize = 3;
-    const cellSize = CHUNK_SIZE / gSize;
-    const { hWalls, vWalls } = generateWallGrid(cx, cz, gSize);
+function addWallsToChunk(group, chunkState, wallMaterial, wallGeometry, positions) {
+    for (const position of positions) {
+        const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+        wall.position.copy(position);
+        addStaticMesh(group, wall, chunkState.walls, { castShadow: true, receiveShadow: true });
+    }
+}
 
-    // Place walls
-    for (let i = 0; i <= gSize; i++) {
-        const posX = -CHUNK_SIZE / 2 + i * cellSize;
-        for (let j = 0; j < gSize; j++) {
-            if (vWalls[i][j]) {
-                const wall = new THREE.Mesh(wallGeoV, wallMat);
-                wall.position.set(posX, 1.5, -CHUNK_SIZE / 2 + j * cellSize + cellSize / 2);
-                wall.matrixAutoUpdate = false;
-                wall.updateMatrix();
-                wall.castShadow = true;
-                wall.receiveShadow = true;
-                group.add(wall);
-                walls.push(wall);
+function buildWallPositions(horizontalWalls, verticalWalls, gridSize, cellSize) {
+    const horizontalPositions = [];
+    const verticalPositions = [];
+
+    for (let column = 0; column <= gridSize; column++) {
+        const posX = -CHUNK_SIZE / 2 + column * cellSize;
+
+        for (let row = 0; row < gridSize; row++) {
+            if (verticalWalls[column][row]) {
+                verticalPositions.push(new THREE.Vector3(posX, 1.5, -CHUNK_SIZE / 2 + row * cellSize + cellSize / 2));
             }
         }
     }
 
-    for (let i = 0; i <= gSize; i++) {
-        const posZ = -CHUNK_SIZE / 2 + i * cellSize;
-        for (let j = 0; j < gSize; j++) {
-            if (hWalls[i][j]) {
-                const wall = new THREE.Mesh(wallGeoH, wallMat);
-                wall.position.set(-CHUNK_SIZE / 2 + j * cellSize + cellSize / 2, 1.5, posZ);
-                wall.matrixAutoUpdate = false;
-                wall.updateMatrix();
-                wall.castShadow = true;
-                wall.receiveShadow = true;
-                group.add(wall);
-                walls.push(wall);
+    for (let row = 0; row <= gridSize; row++) {
+        const posZ = -CHUNK_SIZE / 2 + row * cellSize;
+
+        for (let column = 0; column < gridSize; column++) {
+            if (horizontalWalls[row][column]) {
+                horizontalPositions.push(new THREE.Vector3(-CHUNK_SIZE / 2 + column * cellSize + cellSize / 2, 1.5, posZ));
             }
         }
     }
 
-    // Light panels
-    for (let x = 0; x < gSize; x++) {
-        for (let z = 0; z < gSize; z++) {
-            const lx = -CHUNK_SIZE / 2 + x * cellSize + cellSize / 2;
-            const lz = -CHUNK_SIZE / 2 + z * cellSize + cellSize / 2;
-            const panel = new THREE.Mesh(lightPanelGeo, lightPanelMat);
-            panel.position.set(lx, 2.99, lz);
+    return { horizontalPositions, verticalPositions };
+}
+
+function addLightPanels(group, chunkState, resources, gridSize, cellSize) {
+    for (let x = 0; x < gridSize; x++) {
+        for (let z = 0; z < gridSize; z++) {
+            const panel = new THREE.Mesh(resources.lightPanelGeo, resources.lightPanelMat);
+            panel.position.set(
+                -CHUNK_SIZE / 2 + x * cellSize + cellSize / 2,
+                2.99,
+                -CHUNK_SIZE / 2 + z * cellSize + cellSize / 2,
+            );
             panel.rotation.x = Math.PI / 2;
-            panel.matrixAutoUpdate = false;
-            panel.updateMatrix();
-            group.add(panel);
-            lightPanels.push(panel);
+            addStaticMesh(group, panel, chunkState.lightPanels);
         }
     }
+}
 
-    // Debug normals and wall tracking
-    const normalLineMat = new THREE.LineBasicMaterial({ color: 0xff0000 });
+function buildWallsInChunk(horizontalWalls, verticalWalls, gridSize, cellSize, group, debugNormals) {
+    const normalMaterial = new THREE.LineBasicMaterial({ color: 0xff0000 });
     const wallsInChunk = [];
 
-    // Vertical walls debug
-    for (let i = 0; i <= gSize; i++) {
-        const posX = -CHUNK_SIZE / 2 + i * cellSize;
-        for (let j = 0; j < gSize; j++) {
-            if (vWalls[i][j]) {
-                const wallZ = -CHUNK_SIZE / 2 + j * cellSize + cellSize / 2;
-                const wallCenter = new THREE.Vector3(posX, 1.5, wallZ);
+    for (let index = 0; index <= gridSize; index++) {
+        const posX = -CHUNK_SIZE / 2 + index * cellSize;
+        const posZ = -CHUNK_SIZE / 2 + index * cellSize;
 
-                const normalPlusX = createNormalLine(wallCenter, new THREE.Vector3(1, 0, 0), normalLineMat);
-                normalPlusX.visible = false;
-                group.add(normalPlusX);
-                debugNormals.push(normalPlusX);
-
-                const normalMinusX = createNormalLine(wallCenter, new THREE.Vector3(-1, 0, 0), normalLineMat);
-                normalMinusX.visible = false;
-                group.add(normalMinusX);
-                debugNormals.push(normalMinusX);
-
+        for (let offset = 0; offset < gridSize; offset++) {
+            if (verticalWalls[index][offset]) {
+                const wallCenter = new THREE.Vector3(posX, 1.5, -CHUNK_SIZE / 2 + offset * cellSize + cellSize / 2);
+                addDebugNormals(group, debugNormals, wallCenter, [new THREE.Vector3(1, 0, 0), new THREE.Vector3(-1, 0, 0)], normalMaterial);
                 wallsInChunk.push({ center: wallCenter, type: 'V', normals: [new THREE.Vector3(1, 0, 0), new THREE.Vector3(-1, 0, 0)] });
             }
-        }
-    }
 
-    // Horizontal walls debug
-    for (let i = 0; i <= gSize; i++) {
-        const posZ = -CHUNK_SIZE / 2 + i * cellSize;
-        for (let j = 0; j < gSize; j++) {
-            if (hWalls[i][j]) {
-                const wallX = -CHUNK_SIZE / 2 + j * cellSize + cellSize / 2;
-                const wallCenter = new THREE.Vector3(wallX, 1.5, posZ);
-
-                const normalPlusZ = createNormalLine(wallCenter, new THREE.Vector3(0, 0, 1), normalLineMat);
-                normalPlusZ.visible = false;
-                group.add(normalPlusZ);
-                debugNormals.push(normalPlusZ);
-
-                const normalMinusZ = createNormalLine(wallCenter, new THREE.Vector3(0, 0, -1), normalLineMat);
-                normalMinusZ.visible = false;
-                group.add(normalMinusZ);
-                debugNormals.push(normalMinusZ);
-
+            if (horizontalWalls[index][offset]) {
+                const wallCenter = new THREE.Vector3(-CHUNK_SIZE / 2 + offset * cellSize + cellSize / 2, 1.5, posZ);
+                addDebugNormals(group, debugNormals, wallCenter, [new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, -1)], normalMaterial);
                 wallsInChunk.push({ center: wallCenter, type: 'H', normals: [new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, -1)] });
             }
         }
     }
 
-    // Add outlets randomly
-    if (outletModel) {
-        for (const wallInfo of wallsInChunk) {
-            const wallSeed = seed + wallInfo.center.x * 1000 + wallInfo.center.z * 2000;
-            if (rnd(wallSeed) > 0.05) continue;
+    return wallsInChunk;
+}
 
-            const normalIndex = rnd(wallSeed + 1) > 0.5 ? 0 : 1;
-            const normal = wallInfo.normals[normalIndex];
+function addDebugNormals(group, debugNormals, center, normals, material) {
+    for (const normal of normals) {
+        const normalLine = createNormalLine(center, normal, material);
+        normalLine.visible = false;
+        group.add(normalLine);
+        debugNormals.push(normalLine);
+    }
+}
 
-            const outlet = outletModel.clone();
-            const outletHeight = 0.2;
+function seededNoise(seed) {
+    return Math.abs(Math.sin(seed) * 10000) % 1;
+}
 
-            let offsetX = 0, offsetZ = 0;
-            if (wallInfo.type === 'V') {
-                offsetZ = (rnd(wallSeed + 3) - 0.5) * 6;
-            } else {
-                offsetX = (rnd(wallSeed + 3) - 0.5) * 6;
-            }
-
-            outlet.position.set(
-                wallInfo.center.x + offsetX + normal.x * 0.16,
-                outletHeight,
-                wallInfo.center.z + offsetZ + normal.z * 0.16
-            );
-
-            if (normal.x > 0.5) {
-                outlet.rotation.y = Math.PI / 2;
-            } else if (normal.x < -0.5) {
-                outlet.rotation.y = -Math.PI / 2;
-            } else if (normal.z > 0.5) {
-                outlet.rotation.y = 0;
-            } else {
-                outlet.rotation.y = Math.PI;
-            }
-
-            group.add(outlet);
-
-            const outletBoxHelper = new THREE.BoxHelper(outlet, 0xff00ff);
-            outletBoxHelper.visible = debugMode;
-            group.add(outletBoxHelper);
-            debugNormals.push(outletBoxHelper);
-
-            const axes = new THREE.AxesHelper(0.5);
-            axes.visible = debugMode;
-            outlet.add(axes);
-            debugNormals.push(axes);
-        }
+function getWallAttachmentOffset(wallInfo, seed, spread) {
+    if (wallInfo.type === 'V') {
+        return { offsetX: 0, offsetZ: (seededNoise(seed) - 0.5) * spread };
     }
 
-    // Add wall phones
-    const chunkDistFromSpawn = Math.max(Math.abs(cx), Math.abs(cz));
-    const phonesAllowed = chunkDistFromSpawn >= PHONE_EXCLUSION_DIST;
+    return { offsetX: (seededNoise(seed) - 0.5) * spread, offsetZ: 0 };
+}
 
-    if (wallPhoneModel && phonesAllowed) {
-        for (const wallInfo of wallsInChunk) {
+function applyWallFacingRotation(object, normal, axisRotation = 0) {
+    object.rotation.z = axisRotation;
+
+    if (normal.x > 0.5) {
+        object.rotation.y = 0;
+        return;
+    }
+
+    if (normal.x < -0.5) {
+        object.rotation.y = Math.PI;
+        return;
+    }
+
+    object.rotation.y = normal.z > 0.5 ? -Math.PI / 2 : Math.PI / 2;
+}
+
+function applyOutletRotation(object, normal) {
+    if (normal.x > 0.5) {
+        object.rotation.y = Math.PI / 2;
+        return;
+    }
+
+    if (normal.x < -0.5) {
+        object.rotation.y = -Math.PI / 2;
+        return;
+    }
+
+    object.rotation.y = normal.z > 0.5 ? 0 : Math.PI;
+}
+
+function addDebugHelpers(object, group, debugNormals, debugMode, color, size) {
+    const boxHelper = new THREE.BoxHelper(object, color);
+    boxHelper.visible = debugMode;
+    group.add(boxHelper);
+    debugNormals.push(boxHelper);
+
+    const axes = new THREE.AxesHelper(size);
+    axes.visible = debugMode;
+    object.add(axes);
+    debugNormals.push(axes);
+}
+
+function maybeAddOutlet(group, wallInfo, seed, chunkState, debugNormals, debugMode, outletModel) {
+    if (!outletModel || seededNoise(seed) > 0.05) {
+        return;
+    }
+
+    const normal = wallInfo.normals[seededNoise(seed + 1) > 0.5 ? 0 : 1];
+    const { offsetX, offsetZ } = getWallAttachmentOffset(wallInfo, seed + 3, 6);
+    const outlet = outletModel.clone();
+    outlet.position.set(
+        wallInfo.center.x + offsetX + normal.x * 0.16,
+        0.2,
+        wallInfo.center.z + offsetZ + normal.z * 0.16,
+    );
+    applyOutletRotation(outlet, normal);
+    group.add(outlet);
+    addDebugHelpers(outlet, group, debugNormals, debugMode, 0xff00ff, 0.5);
+}
+
+function maybeAddPhone(group, wallInfo, seed, cx, cz, chunkState, debugNormals, debugMode, wallPhoneModel) {
+    if (!wallPhoneModel || seededNoise(seed) > 0.005) {
+        return;
+    }
+
+    const normal = wallInfo.normals[seededNoise(seed + 1) > 0.5 ? 0 : 1];
+    const { offsetX, offsetZ } = getWallAttachmentOffset(wallInfo, seed + 3, 5);
+    const phoneHeight = 1.7;
+    const phoneX = wallInfo.center.x + offsetX + normal.x * 0.15;
+    const phoneZ = wallInfo.center.z + offsetZ + normal.z * 0.15;
+    const phone = wallPhoneModel.clone();
+
+    phone.position.set(phoneX, phoneHeight, phoneZ);
+    applyWallFacingRotation(phone, normal, -Math.PI / 2);
+    group.add(phone);
+    chunkState.phoneMeshes.push(phone);
+    chunkState.phonePositions.push(new THREE.Vector3(cx * CHUNK_SIZE + phoneX, phoneHeight, cz * CHUNK_SIZE + phoneZ));
+
+    phone.traverse((child) => {
+        if (child.isMesh) {
+            chunkState.raycastTargets.push(child);
+        }
+    });
+
+    addDebugHelpers(phone, group, debugNormals, debugMode, 0x00ffff, 0.5);
+}
+
+function addPropsToChunk(group, chunkState, wallsInChunk, cx, cz, resources, debugNormals, debugMode) {
+    const chunkDistanceFromSpawn = Math.max(Math.abs(cx), Math.abs(cz));
+    const phonesAllowed = chunkDistanceFromSpawn >= PHONE_EXCLUSION_DIST;
+    const seed = (cx * 12345) ^ (cz * 54321);
+
+    for (const wallInfo of wallsInChunk) {
+        const wallSeed = seed + wallInfo.center.x * 1000 + wallInfo.center.z * 2000;
+        maybeAddOutlet(group, wallInfo, wallSeed, chunkState, debugNormals, debugMode, resources.outletModel);
+
+        if (phonesAllowed) {
             const phoneSeed = seed + wallInfo.center.x * 3000 + wallInfo.center.z * 4000 + 12345;
-            if (rnd(phoneSeed) > 0.005) continue;
-
-            const normalIndex = rnd(phoneSeed + 1) > 0.5 ? 0 : 1;
-            const normal = wallInfo.normals[normalIndex];
-
-            const phone = wallPhoneModel.clone();
-            const phoneHeight = 1.7;
-
-            let offsetX = 0, offsetZ = 0;
-            if (wallInfo.type === 'V') {
-                offsetZ = (rnd(phoneSeed + 3) - 0.5) * 5;
-            } else {
-                offsetX = (rnd(phoneSeed + 3) - 0.5) * 5;
-            }
-
-            const phoneX = wallInfo.center.x + offsetX + normal.x * 0.15;
-            const phoneZ = wallInfo.center.z + offsetZ + normal.z * 0.15;
-
-            phone.position.set(phoneX, phoneHeight, phoneZ);
-            phone.rotation.z = -Math.PI / 2;
-
-            if (normal.x > 0.5) {
-                phone.rotation.y = 0;
-            } else if (normal.x < -0.5) {
-                phone.rotation.y = Math.PI;
-            } else if (normal.z > 0.5) {
-                phone.rotation.y = -Math.PI / 2;
-            } else {
-                phone.rotation.y = Math.PI / 2;
-            }
-
-            group.add(phone);
-
-            const phoneBoxHelper = new THREE.BoxHelper(phone, 0x00ffff);
-            phoneBoxHelper.visible = debugMode;
-            group.add(phoneBoxHelper);
-            debugNormals.push(phoneBoxHelper);
-
-            const phoneAxes = new THREE.AxesHelper(0.5);
-            phoneAxes.visible = debugMode;
-            phone.add(phoneAxes);
-            debugNormals.push(phoneAxes);
-
-            const worldPhonePos = new THREE.Vector3(
-                cx * CHUNK_SIZE + phoneX,
-                phoneHeight,
-                cz * CHUNK_SIZE + phoneZ
-            );
-            phonePositions.push(worldPhonePos);
-            if (!group.userData.phonePositions) group.userData.phonePositions = [];
-            group.userData.phonePositions.push(worldPhonePos);
-
-            // Track phone mesh for raycasting (mobile tap interaction)
-            if (phoneMeshes) {
-                phoneMeshes.push(phone);
-                if (!group.userData.phoneMeshes) group.userData.phoneMeshes = [];
-                group.userData.phoneMeshes.push(phone);
-            }
+            maybeAddPhone(group, wallInfo, phoneSeed, cx, cz, chunkState, debugNormals, debugMode, resources.wallPhoneModel);
         }
     }
+}
+
+function cacheChunkWorldData(group, chunkState) {
+    group.updateMatrixWorld(true);
+
+    for (const wall of chunkState.walls) {
+        wall.userData.worldBox = new THREE.Box3().setFromObject(wall);
+    }
+
+    for (const panel of chunkState.lightPanels) {
+        panel.userData.worldPosition = panel.getWorldPosition(new THREE.Vector3());
+    }
+}
+
+function attachChunkState(group, chunkState, border) {
+    group.userData.border = border;
+    group.userData.lightPanels = chunkState.lightPanels;
+    group.userData.phoneMeshes = chunkState.phoneMeshes;
+    group.userData.phonePositions = chunkState.phonePositions;
+    group.userData.raycastTargets = chunkState.raycastTargets;
+    group.userData.walls = chunkState.walls;
+}
+
+function mergeChunkCollections(chunkState, walls, lightPanels, phonePositions, phoneMeshes) {
+    walls.push(...chunkState.walls);
+    lightPanels.push(...chunkState.lightPanels);
+    phonePositions.push(...chunkState.phonePositions);
+    phoneMeshes.push(...chunkState.raycastTargets);
+}
+
+export function generateChunk(cx, cz, scene, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes) {
+    const group = new THREE.Group();
+    const chunkState = createChunkState();
+    const gridSize = 3;
+    const cellSize = CHUNK_SIZE / gridSize;
+    const { horizontalWalls, verticalWalls } = generateWallGrid(cx, cz, gridSize);
+    const { horizontalPositions, verticalPositions } = buildWallPositions(horizontalWalls, verticalWalls, gridSize, cellSize);
+
+    addFloorAndCeiling(group, resources);
+    addWallsToChunk(group, chunkState, resources.wallMat, resources.wallGeoV, verticalPositions);
+    addWallsToChunk(group, chunkState, resources.wallMat, resources.wallGeoH, horizontalPositions);
+    addLightPanels(group, chunkState, resources, gridSize, cellSize);
+
+    const wallsInChunk = buildWallsInChunk(horizontalWalls, verticalWalls, gridSize, cellSize, group, debugNormals);
+    addPropsToChunk(group, chunkState, wallsInChunk, cx, cz, resources, debugNormals, debugMode);
 
     group.position.set(cx * CHUNK_SIZE, 0, cz * CHUNK_SIZE);
     scene.add(group);
@@ -407,7 +477,10 @@ export function generateChunk(cx, cz, scene, resources, debugMode, debugNormals,
     const border = createChunkBorder(cx, cz, debugMode);
     scene.add(border);
     chunkBorders.push(border);
-    group.userData.border = border;
+
+    cacheChunkWorldData(group, chunkState);
+    attachChunkState(group, chunkState, border);
+    mergeChunkCollections(chunkState, walls, lightPanels, phonePositions, phoneMeshes);
 
     return group;
 }
@@ -415,14 +488,14 @@ export function generateChunk(cx, cz, scene, resources, debugMode, debugNormals,
 function isChunkPotentiallyVisible(cx, cz) {
     const chunkCenterX = cx * CHUNK_SIZE;
     const chunkCenterZ = cz * CHUNK_SIZE;
-
     const halfSize = CHUNK_SIZE / 2;
-    const chunkBox = new THREE.Box3(
-        new THREE.Vector3(chunkCenterX - halfSize, 0, chunkCenterZ - halfSize),
-        new THREE.Vector3(chunkCenterX + halfSize, 3, chunkCenterZ + halfSize)
-    );
 
-    return frustum.intersectsBox(chunkBox);
+    tempChunkMin.set(chunkCenterX - halfSize, 0, chunkCenterZ - halfSize);
+    tempChunkMax.set(chunkCenterX + halfSize, 3, chunkCenterZ + halfSize);
+    tempChunkBounds.min.copy(tempChunkMin);
+    tempChunkBounds.max.copy(tempChunkMax);
+
+    return frustum.intersectsBox(tempChunkBounds);
 }
 
 function isChunkNearby(cx, cz, playerChunkX, playerChunkZ) {
@@ -437,99 +510,98 @@ function isChunkInPreloadRange(cx, cz, playerChunkX, playerChunkZ) {
     return dx <= PRELOAD_DIST && dz <= PRELOAD_DIST;
 }
 
-export function updateChunks(camera, scene, chunks, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes) {
-    const px = Math.floor(camera.position.x / CHUNK_SIZE);
-    const pz = Math.floor(camera.position.z / CHUNK_SIZE);
+function getActiveChunkKeys(playerChunkX, playerChunkZ) {
+    const activeKeys = new Set();
 
-    frustumMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-    frustum.setFromProjectionMatrix(frustumMatrix);
-
-    let activeKeys = new Set();
-
-    for (let x = px - PRELOAD_DIST; x <= px + PRELOAD_DIST; x++) {
-        for (let z = pz - PRELOAD_DIST; z <= pz + PRELOAD_DIST; z++) {
-            const k = `${x},${z}`;
-
-            const isNearby = isChunkNearby(x, z, px, pz);
+    for (let x = playerChunkX - PRELOAD_DIST; x <= playerChunkX + PRELOAD_DIST; x++) {
+        for (let z = playerChunkZ - PRELOAD_DIST; z <= playerChunkZ + PRELOAD_DIST; z++) {
+            const isNearby = isChunkNearby(x, z, playerChunkX, playerChunkZ);
             const isPotentiallyVisible = isChunkPotentiallyVisible(x, z);
-            const inPreloadRange = isChunkInPreloadRange(x, z, px, pz);
+            const inPreloadRange = isChunkInPreloadRange(x, z, playerChunkX, playerChunkZ);
 
             if (isNearby || (isPotentiallyVisible && inPreloadRange)) {
-                activeKeys.add(k);
-                if (!chunks.has(k)) {
-                    chunks.set(k, generateChunk(x, z, scene, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes));
-                }
+                activeKeys.add(`${x},${z}`);
             }
         }
     }
 
-    for (const [key, obj] of chunks.entries()) {
-        if (!activeKeys.has(key)) {
-            scene.remove(obj);
-            walls.length = 0;
-            for (const [k, c] of chunks.entries()) {
-                if (k !== key) {
-                    c.children.forEach(child => {
-                        if (child.isMesh && child.geometry === resources.wallGeoV || child.geometry === resources.wallGeoH) {
-                            walls.push(child);
-                        }
-                    });
-                }
-            }
-            lightPanels.length = 0;
-            for (const [k, c] of chunks.entries()) {
-                if (k !== key) {
-                    c.children.forEach(child => {
-                        if (child.isMesh && child.geometry === resources.lightPanelGeo) {
-                            lightPanels.push(child);
-                        }
-                    });
-                }
-            }
-            if (obj.userData.phonePositions) {
-                for (const pos of obj.userData.phonePositions) {
-                    const idx = phonePositions.indexOf(pos);
-                    if (idx !== -1) phonePositions.splice(idx, 1);
-                }
-            }
-            // Clean up phone meshes
-            if (obj.userData.phoneMeshes && phoneMeshes) {
-                for (const mesh of obj.userData.phoneMeshes) {
-                    const idx = phoneMeshes.indexOf(mesh);
-                    if (idx !== -1) phoneMeshes.splice(idx, 1);
-                }
-            }
-            if (obj.userData.border) {
-                scene.remove(obj.userData.border);
-                const idx = chunkBorders.indexOf(obj.userData.border);
-                if (idx !== -1) chunkBorders.splice(idx, 1);
-            }
-            chunks.delete(key);
+    return activeKeys;
+}
+
+function addMissingChunks(activeKeys, scene, chunks, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes) {
+    for (const key of activeKeys) {
+        if (chunks.has(key)) {
+            continue;
+        }
+
+        const [chunkX, chunkZ] = key.split(',').map(Number);
+        chunks.set(
+            key,
+            generateChunk(chunkX, chunkZ, scene, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes),
+        );
+    }
+}
+
+function removeTrackedItems(list, items) {
+    for (const item of items) {
+        const index = list.indexOf(item);
+        if (index !== -1) {
+            list.splice(index, 1);
         }
     }
 }
 
-// Check if there's a clear line of sight between two points
+function removeChunk(scene, key, chunk, chunks, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes) {
+    scene.remove(chunk);
+    chunks.delete(key);
+
+    removeTrackedItems(walls, chunk.userData.walls || []);
+    removeTrackedItems(lightPanels, chunk.userData.lightPanels || []);
+    removeTrackedItems(phonePositions, chunk.userData.phonePositions || []);
+    removeTrackedItems(phoneMeshes, chunk.userData.raycastTargets || []);
+
+    if (chunk.userData.border) {
+        scene.remove(chunk.userData.border);
+        removeTrackedItems(chunkBorders, [chunk.userData.border]);
+    }
+}
+
+export function updateChunks(camera, scene, chunks, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes) {
+    const playerChunkX = Math.floor(camera.position.x / CHUNK_SIZE);
+    const playerChunkZ = Math.floor(camera.position.z / CHUNK_SIZE);
+
+    frustumMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    frustum.setFromProjectionMatrix(frustumMatrix);
+
+    const activeKeys = getActiveChunkKeys(playerChunkX, playerChunkZ);
+    addMissingChunks(activeKeys, scene, chunks, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes);
+
+    for (const [key, chunk] of chunks.entries()) {
+        if (!activeKeys.has(key)) {
+            removeChunk(scene, key, chunk, chunks, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes);
+        }
+    }
+}
+
 export function hasLineOfSight(fromX, fromZ, toX, toZ, walls) {
     const dirX = toX - fromX;
     const dirZ = toZ - fromZ;
-    const rayLength = Math.sqrt(dirX * dirX + dirZ * dirZ);
+    const rayLength = Math.hypot(dirX, dirZ);
 
-    if (rayLength < 0.01) return true;
+    if (rayLength < 0.01) {
+        return true;
+    }
 
     const normX = dirX / rayLength;
     const normZ = dirZ / rayLength;
 
-    for (let i = 0; i < walls.length; i++) {
-        const wall = walls[i];
-        const wPos = new THREE.Vector3();
-        wall.getWorldPosition(wPos);
+    for (const wall of walls) {
+        tempWallBounds.copy(wall.userData.worldBox);
 
-        const wBox = new THREE.Box3().setFromObject(wall);
-        const minX = wBox.min.x;
-        const maxX = wBox.max.x;
-        const minZ = wBox.min.z;
-        const maxZ = wBox.max.z;
+        const minX = tempWallBounds.min.x;
+        const maxX = tempWallBounds.max.x;
+        const minZ = tempWallBounds.min.z;
+        const maxZ = tempWallBounds.max.z;
 
         let tMin = 0;
         let tMax = rayLength;
@@ -537,23 +609,19 @@ export function hasLineOfSight(fromX, fromZ, toX, toZ, walls) {
         if (Math.abs(normX) > 0.0001) {
             const t1 = (minX - fromX) / normX;
             const t2 = (maxX - fromX) / normX;
-            const tNear = Math.min(t1, t2);
-            const tFar = Math.max(t1, t2);
-            tMin = Math.max(tMin, tNear);
-            tMax = Math.min(tMax, tFar);
-        } else {
-            if (fromX < minX || fromX > maxX) continue;
+            tMin = Math.max(tMin, Math.min(t1, t2));
+            tMax = Math.min(tMax, Math.max(t1, t2));
+        } else if (fromX < minX || fromX > maxX) {
+            continue;
         }
 
         if (Math.abs(normZ) > 0.0001) {
             const t1 = (minZ - fromZ) / normZ;
             const t2 = (maxZ - fromZ) / normZ;
-            const tNear = Math.min(t1, t2);
-            const tFar = Math.max(t1, t2);
-            tMin = Math.max(tMin, tNear);
-            tMax = Math.min(tMax, tFar);
-        } else {
-            if (fromZ < minZ || fromZ > maxZ) continue;
+            tMin = Math.max(tMin, Math.min(t1, t2));
+            tMax = Math.min(tMax, Math.max(t1, t2));
+        } else if (fromZ < minZ || fromZ > maxZ) {
+            continue;
         }
 
         if (tMin <= tMax && tMin < rayLength && tMax > 0) {

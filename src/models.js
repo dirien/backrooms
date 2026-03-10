@@ -15,10 +15,13 @@ let wallGeoH = null;
 let floorGeo = null;
 let ceilingGeo = null;
 let lightPanelGeo = null;
+let wallTexture = null;
+let ceilingTexture = null;
 let outletModel = null;
 let wallPhoneModel = null;
 let bacteriaModel = null;
 let gltfLoader = null;
+let textureLoader = null;
 
 export function getResources() {
     return {
@@ -60,7 +63,6 @@ function createWallGeometry(width, height, depth) {
         const z = posAttribute.getZ(i);
 
         const nx = normalAttribute.getX(i);
-        const ny = normalAttribute.getY(i);
         const nz = normalAttribute.getZ(i);
 
         let u, v;
@@ -83,10 +85,10 @@ function createWallGeometry(width, height, depth) {
     return geo;
 }
 
-function loadCeilingTexture(textureLoader) {
-    const ceilTex = textureLoader.load('/graphics/ceiling-tile.png');
-    ceilTex.wrapS = ceilTex.wrapT = THREE.RepeatWrapping;
-    return ceilTex;
+function loadCeilingTexture(loader) {
+    const texture = loader.load('/graphics/ceiling-tile.png');
+    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+    return texture;
 }
 
 function enhanceMaterialWithDarkness(material) {
@@ -145,39 +147,68 @@ function enhanceMaterialWithDarkness(material) {
     };
 }
 
-export function createGlobalResources() {
-    const textureLoader = new THREE.TextureLoader();
-    const wallTex = textureLoader.load('/graphics/wallpaper.png');
-    wallTex.wrapS = wallTex.wrapT = THREE.RepeatWrapping;
-    wallTex.repeat.set(1, 1);
+export function createGlobalResources(theme) {
+    if (!textureLoader) {
+        textureLoader = new THREE.TextureLoader();
+    }
 
-    const ceilTex = loadCeilingTexture(textureLoader);
-    const tileWorldSize = 1.5;
-    ceilTex.repeat.set(CHUNK_SIZE / tileWorldSize, CHUNK_SIZE / tileWorldSize);
+    if (!wallTexture) {
+        wallTexture = textureLoader.load('/graphics/wallpaper.png');
+        wallTexture.wrapS = wallTexture.wrapT = THREE.RepeatWrapping;
+        wallTexture.repeat.set(1, 1);
+    }
 
-    wallMat = new THREE.MeshLambertMaterial({
-        map: wallTex,
-        side: THREE.FrontSide
-    });
-    enhanceMaterialWithDarkness(wallMat);
+    if (!ceilingTexture) {
+        ceilingTexture = loadCeilingTexture(textureLoader);
+        const tileWorldSize = 1.5;
+        ceilingTexture.repeat.set(CHUNK_SIZE / tileWorldSize, CHUNK_SIZE / tileWorldSize);
+    }
 
-    floorMat = new THREE.MeshLambertMaterial({
-        color: 0xa9a865,
-        side: THREE.FrontSide
-    });
-    enhanceMaterialWithDarkness(floorMat);
+    createSharedMaterials();
+    createSharedGeometry();
+    applyTheme(theme);
 
-    ceilingMat = new THREE.MeshStandardMaterial({
-        map: ceilTex,
-        roughness: 0.95,
-        metalness: 0,
-        color: 0xbbbbbb,
-        side: THREE.DoubleSide
-    });
-    enhanceMaterialWithDarkness(ceilingMat);
+    if (!gltfLoader) {
+        gltfLoader = new GLTFLoader();
+    }
+}
 
-    lightPanelMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    enhanceMaterialWithDarkness(lightPanelMat);
+function createSharedMaterials() {
+    if (!wallMat) {
+        wallMat = new THREE.MeshLambertMaterial({
+            map: wallTexture,
+            side: THREE.FrontSide
+        });
+        enhanceMaterialWithDarkness(wallMat);
+    }
+
+    if (!floorMat) {
+        floorMat = new THREE.MeshLambertMaterial({
+            side: THREE.FrontSide
+        });
+        enhanceMaterialWithDarkness(floorMat);
+    }
+
+    if (!ceilingMat) {
+        ceilingMat = new THREE.MeshStandardMaterial({
+            map: ceilingTexture,
+            roughness: 0.95,
+            metalness: 0,
+            side: THREE.DoubleSide
+        });
+        enhanceMaterialWithDarkness(ceilingMat);
+    }
+
+    if (!lightPanelMat) {
+        lightPanelMat = new THREE.MeshBasicMaterial();
+        enhanceMaterialWithDarkness(lightPanelMat);
+    }
+}
+
+function createSharedGeometry() {
+    if (wallGeoV && wallGeoH && floorGeo && ceilingGeo && lightPanelGeo) {
+        return;
+    }
 
     const gSize = 3;
     const cellSize = CHUNK_SIZE / gSize;
@@ -193,8 +224,22 @@ export function createGlobalResources() {
 
     floorGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE);
     ceilingGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE);
+}
 
-    gltfLoader = new GLTFLoader();
+function applyTheme(theme) {
+    wallMat.color.setHex(theme.wallColor);
+    wallMat.map = wallTexture;
+    wallMat.needsUpdate = true;
+
+    floorMat.color.setHex(theme.floorColor);
+    floorMat.needsUpdate = true;
+
+    ceilingMat.color.setHex(theme.ceilingColor);
+    ceilingMat.map = ceilingTexture;
+    ceilingMat.needsUpdate = true;
+
+    lightPanelMat.color.setHex(theme.lightPanelColor);
+    lightPanelMat.needsUpdate = true;
 }
 
 export function loadOutletModel() {
@@ -225,7 +270,6 @@ export function loadOutletModel() {
                 }
             });
 
-            console.log('Wall outlet model loaded');
             resolve();
         }, undefined, (error) => {
             console.warn('Failed to load outlet model:', error);
@@ -253,7 +297,6 @@ export function loadWallPhoneModel() {
                 }
             });
 
-            console.log('Wall phone model loaded');
             resolve();
         }, undefined, (error) => {
             console.warn('Failed to load wall phone model:', error);
@@ -283,7 +326,6 @@ export function loadBacteriaModel() {
                 }
             });
 
-            console.log('Bacteria entity model loaded (black, 50% scale)');
             resolve();
         }, undefined, (error) => {
             console.warn('Failed to load bacteria model:', error);

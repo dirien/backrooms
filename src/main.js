@@ -5,7 +5,7 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
 // Import modules
-import { CHUNK_SIZE, PLAYER_RADIUS, WAKEUP_DURATION, FADE_DURATION, GAME_OVER_DELAY, DEBUG_SANITY_LEVELS, PHONE_INTERACT_DIST } from './constants.js';
+import { PLAYER_RADIUS, WAKEUP_DURATION, FADE_DURATION, GAME_OVER_DELAY, DEBUG_SANITY_LEVELS, PHONE_INTERACT_DIST } from './constants.js';
 import { POST_SHADER, FADE_SHADER, WAKEUP_SHADER } from './shaders/index.js';
 import {
     initAudioContext,
@@ -36,7 +36,7 @@ import {
     getHudCamera,
     setMobileHUD
 } from './hud.js';
-import { updateChunks, generateChunk } from './world.js';
+import { updateChunks } from './world.js';
 import { updateBacteriaEntity, resetBacteriaState } from './entity.js';
 import {
     detectMobile,
@@ -58,6 +58,9 @@ import {
     getMaterials,
     getBacteriaModel
 } from './models.js';
+import { DEFAULT_LEVEL_ID, getLevelById, BACKROOM_LEVELS } from './levels.js';
+import { createLevelMenu } from './menu.js';
+import { randomBetween } from './random.js';
 
 /**
  * BACKROOMS - Level 0: The Lobby
@@ -68,8 +71,8 @@ let wakeupPass = null;
 let wakeupStartTime = -1;
 let fadePass = null;
 let fadeStartTime = -1;
-let velocity = new THREE.Vector3();
-let chunks = new Map();
+const velocity = new THREE.Vector3();
+const chunks = new Map();
 let walls = [];
 let lightPanels = [];
 let phonePositions = [];
@@ -83,25 +86,51 @@ let debugSanityOverride = -1;
 let nearestPhoneDist = Infinity;
 let isInteractingWithPhone = false;
 let isSanityGameOver = false;
+let currentLevel = getLevelById(DEFAULT_LEVEL_ID);
+let menuController = null;
+let ambientLight = null;
+let playerLight = null;
 
 // Raycaster for mobile phone tap interaction
-let raycaster = new THREE.Raycaster();
+const raycaster = new THREE.Raycaster();
+const collisionPlayerBounds = new THREE.Box3();
+const collisionWallBounds = new THREE.Box3();
+const collisionOverlapBounds = new THREE.Box3();
+const collisionOverlapSize = new THREE.Vector3();
+const wallWorldPosition = new THREE.Vector3();
+const phoneTapCoordinates = new THREE.Vector2();
+const movementInput = new THREE.Vector3();
+const forwardDirection = new THREE.Vector3();
+const rightDirection = new THREE.Vector3();
+const movementVector = new THREE.Vector3();
+const nextCameraPosition = new THREE.Vector3();
+const bloomPassSize = new THREE.Vector2();
+
+let fpsCounterElement = null;
+let fpsValueElement = null;
+let crosshairElement = null;
+let startScreenElement = null;
+let touchControlsElement = null;
 
 let fpsFrames = 0;
 let fpsPrevTime = performance.now();
 
 function handleCollision(target) {
-    const pBox = new THREE.Box3().setFromCenterAndSize(target, new THREE.Vector3(PLAYER_RADIUS * 2, 1.8, PLAYER_RADIUS * 2));
-    for (let i = 0; i < walls.length; i++) {
-        const wBox = new THREE.Box3().setFromObject(walls[i]);
-        if (pBox.intersectsBox(wBox)) {
-            const overlap = new THREE.Box3().copy(pBox).intersect(wBox);
-            const size = new THREE.Vector3();
-            overlap.getSize(size);
-            const wPos = new THREE.Vector3();
-            walls[i].getWorldPosition(wPos);
-            if (size.x < size.z) target.x += (target.x > wPos.x ? 1 : -1) * size.x;
-            else target.z += (target.z > wPos.z ? 1 : -1) * size.z;
+    collisionPlayerBounds.setFromCenterAndSize(target, wallWorldPosition.set(PLAYER_RADIUS * 2, 1.8, PLAYER_RADIUS * 2));
+
+    for (const wall of walls) {
+        collisionWallBounds.copy(wall.userData.worldBox);
+
+        if (collisionPlayerBounds.intersectsBox(collisionWallBounds)) {
+            collisionOverlapBounds.copy(collisionPlayerBounds).intersect(collisionWallBounds);
+            collisionOverlapBounds.getSize(collisionOverlapSize);
+            wall.getWorldPosition(wallWorldPosition);
+
+            if (collisionOverlapSize.x < collisionOverlapSize.z) {
+                target.x += (target.x > wallWorldPosition.x ? 1 : -1) * collisionOverlapSize.x;
+            } else {
+                target.z += (target.z > wallWorldPosition.z ? 1 : -1) * collisionOverlapSize.z;
+            }
         }
     }
 }
@@ -117,7 +146,6 @@ function toggleDebugMode() {
     if (!debugMode) {
         debugSanityOverride = -1;
     }
-    console.log('Debug mode:', debugMode ? 'ON' : 'OFF');
 }
 
 function cycleSanityLevel(direction) {
@@ -132,7 +160,6 @@ function cycleSanityLevel(direction) {
     }
 
     playerSanity = DEBUG_SANITY_LEVELS[debugSanityOverride];
-    console.log('Debug sanity level:', playerSanity + '%');
 }
 
 function interactWithPhone() {
@@ -157,20 +184,10 @@ function checkPhoneTap(clientX, clientY) {
     const x = ((clientX - rect.left) / rect.width) * 2 - 1;
     const y = -((clientY - rect.top) / rect.height) * 2 + 1;
 
-    raycaster.setFromCamera(new THREE.Vector2(x, y), camera);
+    phoneTapCoordinates.set(x, y);
+    raycaster.setFromCamera(phoneTapCoordinates, camera);
 
-    // Check intersection with all phone meshes and their children
-    const allPhoneObjects = [];
-    for (const phone of phoneMeshes) {
-        phone.traverse((child) => {
-            if (child.isMesh) {
-                allPhoneObjects.push(child);
-            }
-        });
-        allPhoneObjects.push(phone);
-    }
-
-    const intersects = raycaster.intersectObjects(allPhoneObjects, true);
+    const intersects = raycaster.intersectObjects(phoneMeshes, false);
 
     if (intersects.length > 0) {
         // Check if the intersection is within interact distance
@@ -185,15 +202,12 @@ function checkPhoneTap(clientX, clientY) {
 }
 
 function resetGameState() {
-    document.getElementById('fps-counter').style.display = 'none';
-    document.getElementById('crosshair').style.display = 'none';
-
-    const touchControls = document.getElementById('touch-controls');
-    if (touchControls) {
-        touchControls.classList.remove('active');
-    }
-
-    document.getElementById('start-screen').style.display = 'flex';
+    fpsCounterElement.style.display = 'none';
+    crosshairElement.style.display = 'none';
+    touchControlsElement?.classList.remove('active');
+    startScreenElement.style.display = 'flex';
+    document.title = 'Backrooms';
+    menuController?.showSelection();
 
     if (document.pointerLockElement) {
         document.exitPointerLock();
@@ -230,26 +244,15 @@ function resetGameState() {
         wakeupPass.uniforms.effectOpacity.value = 1.0;
     }
 
-    for (const [key, obj] of chunks.entries()) {
-        scene.remove(obj);
-        if (obj.userData.border) {
-            scene.remove(obj.userData.border);
-        }
-        chunks.delete(key);
-    }
-    walls = [];
-    lightPanels = [];
-    phonePositions = [];
-    phoneMeshes = [];
-    chunkBorders = [];
-    debugNormals = [];
+    clearWorldState();
+    clearAmbientTimers();
 
     resetBacteriaState();
 }
 
 let doorCloseTimeout = null;
 function scheduleAmbientDoorClose() {
-    if (doorCloseTimeout) clearTimeout(doorCloseTimeout);
+    clearDoorCloseTimeout();
 
     const nextDoor = playAmbientDoorClose(isStarted, playerSanity, debugSanityOverride);
     if (nextDoor) {
@@ -259,10 +262,10 @@ function scheduleAmbientDoorClose() {
 
 let footstepsTimeout = null;
 function scheduleAmbientFootsteps() {
-    if (footstepsTimeout) clearTimeout(footstepsTimeout);
+    clearFootstepsTimeout();
 
     playAmbientFootsteps(isStarted);
-    const nextFootsteps = 8000 + Math.random() * 17000;
+    const nextFootsteps = randomBetween(8000, 25000);
     footstepsTimeout = setTimeout(scheduleAmbientFootsteps, nextFootsteps);
 }
 
@@ -270,168 +273,29 @@ function animate() {
     requestAnimationFrame(animate);
     const delta = clock.getDelta();
 
-    fpsFrames++;
-    const currentTime = performance.now();
-    if (currentTime >= fpsPrevTime + 1000) {
-        document.getElementById('fps-val').innerText = Math.round((fpsFrames * 1000) / (currentTime - fpsPrevTime));
-        fpsFrames = 0;
-        fpsPrevTime = currentTime;
-    }
+    updateFpsCounter();
 
     const isMobile = isMobileDevice();
     const canMove = document.pointerLockElement === renderer.domElement || isMobile;
 
     if (canMove) {
-        const speed = 4.0;
-        const friction = 12.0;
-        velocity.x -= velocity.x * friction * delta;
-        velocity.z -= velocity.z * friction * delta;
-
-        const input = new THREE.Vector3();
-        const { moveForward, moveBackward, moveLeft, moveRight } = getMovementState();
-
-        if (moveForward) input.z -= 1;
-        if (moveBackward) input.z += 1;
-        if (moveLeft) input.x -= 1;
-        if (moveRight) input.x += 1;
-
-        if (isMobile && isJoystickActive()) {
-            const joystickInput = getJoystickInput();
-            input.x += joystickInput.x;
-            input.z += joystickInput.y;
-        }
-
-        input.normalize();
-
-        const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-        fwd.y = 0;
-        fwd.normalize();
-        const rgt = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
-        rgt.y = 0;
-        rgt.normalize();
-
-        const move = new THREE.Vector3().addScaledVector(fwd, -input.z).addScaledVector(rgt, input.x);
-        velocity.addScaledVector(move, speed * friction * delta);
-
-        const next = camera.position.clone().addScaledVector(velocity, delta);
-        next.y = 1.7;
-        handleCollision(next);
-        camera.position.copy(next);
-
-        if (debugSanityOverride === -1) {
-            let drainRate = 0.337;
-            if (playerSanity <= 10) {
-                drainRate = 1.348;
-            } else if (playerSanity <= 30) {
-                drainRate = 0.899;
-            } else if (playerSanity <= 50) {
-                drainRate = 0.562;
-            } else if (playerSanity <= 80) {
-                drainRate = 0.449;
-            }
-            playerSanity -= delta * drainRate;
-            playerSanity = Math.max(0, playerSanity);
-
-            // Trigger game over when sanity reaches zero
-            if (playerSanity <= 0 && !isSanityGameOver && !isInteractingWithPhone) {
-                isSanityGameOver = true;
-                fadeAllAudioToSilence(FADE_DURATION);
-                if (fadePass) {
-                    fadePass.enabled = true;
-                    fadeStartTime = performance.now();
-                }
-            }
-        }
-
+        updatePlayerMovement(delta, isMobile);
+        drainPlayerSanity(delta);
         updateHUDSanity(playerSanity);
     }
 
-    // Update master audio distortion based on sanity
-    updateMasterDistortion(playerSanity, debugSanityOverride);
-
-    // Update kids laugh sound (starts at 50% sanity, gets more distorted as sanity drops)
-    updateKidsLaughDistortion(playerSanity, debugSanityOverride);
-
-    const resources = getResources();
-    updateChunks(camera, scene, chunks, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes);
-    updateHumVolume(camera, lightPanels);
-    nearestPhoneDist = updatePhoneRingVolume(camera, phonePositions);
-    updatePhoneInteractPrompt(nearestPhoneDist, isInteractingWithPhone);
-
-    const materials = getMaterials();
-    updateBacteriaEntity(getBacteriaModel(), camera, scene, walls, materials, isStarted, playerSanity, debugSanityOverride);
-
-    composer.passes[2].uniforms.time.value = clock.elapsedTime;
-    composer.passes[2].uniforms.sanity.value = playerSanity / 100;
-
-    // Update wake-up animation
-    if (wakeupPass && wakeupStartTime >= 0) {
-        const elapsed = (performance.now() - wakeupStartTime) / 1000;
-        const progress = Math.min(elapsed / WAKEUP_DURATION, 1.0);
-
-        let eyeOpen;
-        if (progress < 0.12) {
-            eyeOpen = Math.sin(progress / 0.12 * Math.PI) * 0.2;
-        } else if (progress < 0.25) {
-            const p = (progress - 0.12) / 0.13;
-            eyeOpen = Math.sin(p * Math.PI) * 0.35;
-        } else if (progress < 0.45) {
-            const p = (progress - 0.25) / 0.2;
-            eyeOpen = 0.25 + Math.sin(p * Math.PI) * 0.35;
-        } else if (progress < 0.85) {
-            const p = (progress - 0.45) / 0.4;
-            const eased = 1 - Math.pow(1 - p, 3);
-            eyeOpen = 0.5 + eased * 0.5;
-        } else {
-            eyeOpen = 1.0;
-        }
-
-        let effectOpacity = 1.0;
-        if (progress > 0.7) {
-            effectOpacity = 1.0 - ((progress - 0.7) / 0.3);
-        }
-
-        wakeupPass.uniforms.eyeOpen.value = eyeOpen;
-        wakeupPass.uniforms.blurAmount.value = Math.max(0, (1.0 - progress * 1.5)) * effectOpacity;
-        wakeupPass.uniforms.effectOpacity.value = effectOpacity;
-
-        if (progress >= 1.0) {
-            wakeupPass.enabled = false;
-            wakeupStartTime = -1;
-        }
-    }
-
-    // Update fade to black animation
-    if (fadePass && fadeStartTime >= 0) {
-        const elapsed = (performance.now() - fadeStartTime) / 1000;
-
-        // For sanity game over, add delay after fade completes
-        const totalDuration = isSanityGameOver ? FADE_DURATION + GAME_OVER_DELAY : FADE_DURATION;
-        const fadeProgress = Math.min(elapsed / FADE_DURATION, 1.0);
-
-        const eased = fadeProgress * fadeProgress;
-        fadePass.uniforms.fadeAmount.value = eased;
-
-        if (elapsed >= totalDuration) {
-            resetGameState();
-        }
-    }
+    updateRuntimeSystems();
+    updateScreenEffects();
 
     composer.render();
-
-    const hudScene = getHudScene();
-    const hudCamera = getHudCamera();
-    if (hudScene && hudScene.visible) {
-        renderer.autoClear = false;
-        renderer.clearDepth();
-        renderer.render(hudScene, hudCamera);
-        renderer.autoClear = true;
-    }
+    renderHud();
 }
 
-async function initGame() {
-    document.getElementById('start-screen').style.display = 'none';
-    document.getElementById('fps-counter').style.display = 'block';
+async function initGame(level = currentLevel) {
+    currentLevel = level;
+    startScreenElement.style.display = 'none';
+    fpsCounterElement.style.display = 'block';
+    document.title = `Backrooms - ${currentLevel.detailTitle}`;
 
     isInteractingWithPhone = false;
     playerSanity = 100;
@@ -441,7 +305,7 @@ async function initGame() {
     const isMobile = detectMobile();
 
     if (!isMobile) {
-        document.getElementById('crosshair').style.display = 'block';
+        crosshairElement.style.display = 'block';
     }
 
     setTimeout(() => {
@@ -454,6 +318,8 @@ async function initGame() {
     }, WAKEUP_DURATION * 1000);
 
     if (isRestart) {
+        createGlobalResources(currentLevel.theme);
+        applyLevelTheme(currentLevel);
         camera.position.set(0, 1.7, 0);
         camera.rotation.set(0, 0, 0);
 
@@ -464,7 +330,7 @@ async function initGame() {
         wakeupStartTime = performance.now();
 
         fadePass.enabled = false;
-        fadePass.uniforms.fadeAmount.value = 0.0;
+        fadePass.uniforms.fadeAmount.value = 0;
 
         resumeAudioContext();
         startGameAudio();
@@ -477,7 +343,7 @@ async function initGame() {
 
     // First time initialization
     initAudioContext();
-    createGlobalResources();
+    createGlobalResources(currentLevel.theme);
 
     await Promise.all([
         loadOutletModel(),
@@ -486,23 +352,23 @@ async function initGame() {
     ]);
 
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x050503);
+    applyLevelTheme(currentLevel);
 
     camera = new THREE.PerspectiveCamera(80, window.innerWidth / window.innerHeight, 0.1, 400);
     camera.position.set(0, 1.7, 0);
 
     renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(window.devicePixelRatio > 1 ? 1 : window.devicePixelRatio);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    document.body.appendChild(renderer.domElement);
+    document.body.append(renderer.domElement);
 
     composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
 
     const bloomPass = new UnrealBloomPass(
-        new THREE.Vector2(window.innerWidth, window.innerHeight),
+        bloomPassSize.set(window.innerWidth, window.innerHeight),
         0.4,
         0.5,
         0.7
@@ -527,14 +393,13 @@ async function initGame() {
 
     clock = new THREE.Clock();
 
-    scene.add(new THREE.AmbientLight(0xd7d3a2, 2.5));
+    ambientLight = new THREE.AmbientLight(currentLevel.theme.ambientLightColor, currentLevel.theme.ambientLightIntensity);
+    scene.add(ambientLight);
 
-    const playerLight = new THREE.PointLight(0xffffee, 0.5, 10, 2);
+    playerLight = new THREE.PointLight(currentLevel.theme.playerLightColor, currentLevel.theme.playerLightIntensity, 10, 2);
     playerLight.position.set(0, 0, 0);
     camera.add(playerLight);
     scene.add(camera);
-
-    scene.fog = new THREE.FogExp2(0x333322, 0.02);
 
     createHUD();
 
@@ -547,7 +412,7 @@ async function initGame() {
     setTimeout(scheduleAmbientFootsteps, 3000);
     setTimeout(scheduleAmbientDoorClose, 6000);
 
-    window.addEventListener('resize', () => {
+    globalThis.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
@@ -562,5 +427,270 @@ async function initGame() {
     animate();
 }
 
-// Expose initGame globally for the HTML button
-window.initGame = initGame;
+function cacheDomElements() {
+    fpsCounterElement = document.getElementById('fps-counter');
+    fpsValueElement = document.getElementById('fps-val');
+    crosshairElement = document.getElementById('crosshair');
+    startScreenElement = document.getElementById('start-screen');
+    touchControlsElement = document.getElementById('touch-controls');
+}
+
+function clearWorldState() {
+    if (!scene) {
+        return;
+    }
+
+    for (const [key, chunk] of chunks.entries()) {
+        scene.remove(chunk);
+        if (chunk.userData.border) {
+            scene.remove(chunk.userData.border);
+        }
+        chunks.delete(key);
+    }
+
+    walls = [];
+    lightPanels = [];
+    phonePositions = [];
+    phoneMeshes = [];
+    chunkBorders = [];
+    debugNormals = [];
+}
+
+function clearDoorCloseTimeout() {
+    if (doorCloseTimeout) {
+        clearTimeout(doorCloseTimeout);
+        doorCloseTimeout = null;
+    }
+}
+
+function clearFootstepsTimeout() {
+    if (footstepsTimeout) {
+        clearTimeout(footstepsTimeout);
+        footstepsTimeout = null;
+    }
+}
+
+function clearAmbientTimers() {
+    clearDoorCloseTimeout();
+    clearFootstepsTimeout();
+}
+
+function updateFpsCounter() {
+    fpsFrames++;
+    const currentTime = performance.now();
+
+    if (currentTime >= fpsPrevTime + 1000) {
+        fpsValueElement.textContent = String(Math.round((fpsFrames * 1000) / (currentTime - fpsPrevTime)));
+        fpsFrames = 0;
+        fpsPrevTime = currentTime;
+    }
+}
+
+function updatePlayerMovement(delta, isMobile) {
+    const speed = 4;
+    const friction = 12;
+
+    velocity.x -= velocity.x * friction * delta;
+    velocity.z -= velocity.z * friction * delta;
+
+    movementInput.set(0, 0, 0);
+    const { moveForward, moveBackward, moveLeft, moveRight } = getMovementState();
+
+    if (moveForward) movementInput.z -= 1;
+    if (moveBackward) movementInput.z += 1;
+    if (moveLeft) movementInput.x -= 1;
+    if (moveRight) movementInput.x += 1;
+
+    if (isMobile && isJoystickActive()) {
+        const joystickInput = getJoystickInput();
+        movementInput.x += joystickInput.x;
+        movementInput.z += joystickInput.y;
+    }
+
+    movementInput.normalize();
+
+    forwardDirection.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    forwardDirection.y = 0;
+    forwardDirection.normalize();
+
+    rightDirection.set(1, 0, 0).applyQuaternion(camera.quaternion);
+    rightDirection.y = 0;
+    rightDirection.normalize();
+
+    movementVector
+        .copy(forwardDirection)
+        .multiplyScalar(-movementInput.z)
+        .addScaledVector(rightDirection, movementInput.x);
+
+    velocity.addScaledVector(movementVector, speed * friction * delta);
+
+    nextCameraPosition.copy(camera.position).addScaledVector(velocity, delta);
+    nextCameraPosition.y = 1.7;
+    handleCollision(nextCameraPosition);
+    camera.position.copy(nextCameraPosition);
+}
+
+function drainPlayerSanity(delta) {
+    if (debugSanityOverride !== -1) {
+        return;
+    }
+
+    playerSanity -= delta * getSanityDrainRate(playerSanity);
+    playerSanity = Math.max(0, playerSanity);
+
+    if (playerSanity <= 0 && !isSanityGameOver && !isInteractingWithPhone) {
+        isSanityGameOver = true;
+        fadeAllAudioToSilence(FADE_DURATION);
+
+        if (fadePass) {
+            fadePass.enabled = true;
+            fadeStartTime = performance.now();
+        }
+    }
+}
+
+function getSanityDrainRate(sanity) {
+    if (sanity <= 10) {
+        return 1.348;
+    }
+
+    if (sanity <= 30) {
+        return 0.899;
+    }
+
+    if (sanity <= 50) {
+        return 0.562;
+    }
+
+    if (sanity <= 80) {
+        return 0.449;
+    }
+
+    return 0.337;
+}
+
+function updateRuntimeSystems() {
+    updateMasterDistortion(playerSanity, debugSanityOverride);
+    updateKidsLaughDistortion(playerSanity, debugSanityOverride);
+
+    const resources = getResources();
+    updateChunks(camera, scene, chunks, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes);
+    updateHumVolume(camera, lightPanels);
+    nearestPhoneDist = updatePhoneRingVolume(camera, phonePositions);
+    updatePhoneInteractPrompt(nearestPhoneDist, isInteractingWithPhone);
+
+    updateBacteriaEntity(
+        getBacteriaModel(),
+        camera,
+        scene,
+        walls,
+        getMaterials(),
+        isStarted,
+        playerSanity,
+        debugSanityOverride,
+    );
+
+    composer.passes[2].uniforms.time.value = clock.elapsedTime;
+    composer.passes[2].uniforms.sanity.value = playerSanity / 100;
+}
+
+function updateScreenEffects() {
+    updateWakeupEffect();
+    updateFadeEffect();
+}
+
+function updateWakeupEffect() {
+    if (!wakeupPass || wakeupStartTime < 0) {
+        return;
+    }
+
+    const elapsed = (performance.now() - wakeupStartTime) / 1000;
+    const progress = Math.min(elapsed / WAKEUP_DURATION, 1);
+    const eyeOpen = getWakeupEyeOpen(progress);
+    const effectOpacity = progress > 0.7 ? 1 - ((progress - 0.7) / 0.3) : 1;
+
+    wakeupPass.uniforms.eyeOpen.value = eyeOpen;
+    wakeupPass.uniforms.blurAmount.value = Math.max(0, (1 - progress * 1.5)) * effectOpacity;
+    wakeupPass.uniforms.effectOpacity.value = effectOpacity;
+
+    if (progress >= 1) {
+        wakeupPass.enabled = false;
+        wakeupStartTime = -1;
+    }
+}
+
+function getWakeupEyeOpen(progress) {
+    if (progress < 0.12) {
+        return Math.sin(progress / 0.12 * Math.PI) * 0.2;
+    }
+
+    if (progress < 0.25) {
+        const segmentProgress = (progress - 0.12) / 0.13;
+        return Math.sin(segmentProgress * Math.PI) * 0.35;
+    }
+
+    if (progress < 0.45) {
+        const segmentProgress = (progress - 0.25) / 0.2;
+        return 0.25 + Math.sin(segmentProgress * Math.PI) * 0.35;
+    }
+
+    if (progress < 0.85) {
+        const segmentProgress = (progress - 0.45) / 0.4;
+        const eased = 1 - (1 - segmentProgress) ** 3;
+        return 0.5 + eased * 0.5;
+    }
+
+    return 1;
+}
+
+function updateFadeEffect() {
+    if (!fadePass || fadeStartTime < 0) {
+        return;
+    }
+
+    const elapsed = (performance.now() - fadeStartTime) / 1000;
+    const totalDuration = isSanityGameOver ? FADE_DURATION + GAME_OVER_DELAY : FADE_DURATION;
+    const fadeProgress = Math.min(elapsed / FADE_DURATION, 1);
+
+    fadePass.uniforms.fadeAmount.value = fadeProgress ** 2;
+
+    if (elapsed >= totalDuration) {
+        resetGameState();
+    }
+}
+
+function renderHud() {
+    const hudScene = getHudScene();
+    const hudCamera = getHudCamera();
+
+    if (!hudScene || !hudScene.visible) {
+        return;
+    }
+
+    renderer.autoClear = false;
+    renderer.clearDepth();
+    renderer.render(hudScene, hudCamera);
+    renderer.autoClear = true;
+}
+
+function applyLevelTheme(level) {
+    if (!scene) {
+        return;
+    }
+
+    scene.background = new THREE.Color(level.theme.sceneBackground);
+    scene.fog = new THREE.FogExp2(level.theme.fogColor, level.theme.fogDensity);
+
+    if (ambientLight) {
+        ambientLight.color.setHex(level.theme.ambientLightColor);
+        ambientLight.intensity = level.theme.ambientLightIntensity;
+    }
+
+    if (playerLight) {
+        playerLight.color.setHex(level.theme.playerLightColor);
+        playerLight.intensity = level.theme.playerLightIntensity;
+    }
+}
+
+cacheDomElements();
+menuController = createLevelMenu(BACKROOM_LEVELS, initGame);

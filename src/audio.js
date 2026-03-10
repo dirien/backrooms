@@ -1,4 +1,5 @@
-import { PHONE_AUDIO_CLOSE_DIST, PHONE_AUDIO_MAX_DIST, PHONE_INTERACT_DIST, DEBUG_SANITY_LEVELS } from './constants.js';
+import { PHONE_AUDIO_CLOSE_DIST, PHONE_AUDIO_MAX_DIST, DEBUG_SANITY_LEVELS } from './constants.js';
+import { randomBetween } from './random.js';
 
 /**
  * Audio system for ambient sounds and phone interaction
@@ -34,6 +35,7 @@ let masterDelayGain = null;
 let masterDryGain = null;
 let masterOutput = null;
 let currentSanityFactor = 0;
+const distortionCurveCache = new Map();
 
 // Export state getters
 export function getAudioContext() {
@@ -46,7 +48,8 @@ export function getKidsLaughBuffer() {
 
 export function initAudioContext() {
     if (!audioCtx) {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const AudioContextConstructor = globalThis.AudioContext || globalThis.webkitAudioContext;
+        audioCtx = new AudioContextConstructor();
         initMasterDistortionChain();
     }
     return audioCtx;
@@ -115,14 +118,7 @@ export function updateMasterDistortion(sanity, debugSanityOverride) {
     if (!audioCtx || !masterDistortion) return;
 
     const effectiveSanity = debugSanityOverride >= 0 ? DEBUG_SANITY_LEVELS[debugSanityOverride] : sanity;
-
-    // Calculate sanity factor (0 at 100% sanity, 1 at 0% sanity)
-    // Start distortion at 50% sanity
-    if (effectiveSanity > 50) {
-        currentSanityFactor = 0;
-    } else {
-        currentSanityFactor = 1 - (effectiveSanity / 50);
-    }
+    currentSanityFactor = effectiveSanity > 50 ? 0 : 1 - (effectiveSanity / 50);
 
     // Update distortion curve
     const distortionAmount = currentSanityFactor * 30;
@@ -165,12 +161,11 @@ export async function loadAmbientSounds() {
         doorCloseBuffer = await audioCtx.decodeAudioData(doorArrayBuffer);
         humBuffer = await audioCtx.decodeAudioData(humArrayBuffer);
         phoneRingBuffer = await audioCtx.decodeAudioData(phoneRingArrayBuffer);
-        console.log('Ambient sounds loaded successfully');
 
         startHumSound();
         startPhoneRingSound();
-    } catch (e) {
-        console.warn('Failed to load ambient sounds:', e);
+    } catch (error) {
+        console.warn('Failed to load ambient sounds:', error);
     }
 }
 
@@ -207,14 +202,7 @@ function startPhoneRingSound() {
 function restartHumSound() {
     if (!humBuffer || !audioCtx) return;
 
-    // Stop existing source if any
-    if (humSource) {
-        try {
-            humSource.stop();
-        } catch (e) {
-            // Already stopped
-        }
-    }
+    stopAudioSource(humSource);
 
     humSource = audioCtx.createBufferSource();
     humSource.buffer = humBuffer;
@@ -233,14 +221,7 @@ function restartHumSound() {
 function restartPhoneRingSound() {
     if (!phoneRingBuffer || !audioCtx) return;
 
-    // Stop existing source if any
-    if (phoneRingSource) {
-        try {
-            phoneRingSource.stop();
-        } catch (e) {
-            // Already stopped
-        }
-    }
+    stopAudioSource(phoneRingSource);
 
     phoneRingSource = audioCtx.createBufferSource();
     phoneRingSource.buffer = phoneRingBuffer;
@@ -261,9 +242,8 @@ export async function loadPhonePickupSound() {
         const response = await fetch('https://cdn.pixabay.com/download/audio/2022/03/10/audio_6650ed59b7.mp3?filename=phone-pick-up-46796.mp3');
         const arrayBuffer = await response.arrayBuffer();
         phonePickupBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-        console.log('Phone pick-up sound loaded successfully');
-    } catch (e) {
-        console.warn('Failed to load phone pick-up sound:', e);
+    } catch (error) {
+        console.warn('Failed to load phone pick-up sound:', error);
     }
 }
 
@@ -272,9 +252,8 @@ export async function loadKidsLaughSound() {
         const response = await fetch('/sounds/kids-laugh.mp3');
         const arrayBuffer = await response.arrayBuffer();
         kidsLaughBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-        console.log('Kids laughing sound loaded successfully');
-    } catch (e) {
-        console.warn('Failed to load kids laughing sound:', e);
+    } catch (error) {
+        console.warn('Failed to load kids laughing sound:', error);
     }
 }
 
@@ -285,8 +264,7 @@ export function updateHumVolume(camera, lightPanels) {
     const playerPos = camera.position;
 
     for (const panel of lightPanels) {
-        const panelWorldPos = panel.position.clone();
-        panel.getWorldPosition(panelWorldPos);
+        const panelWorldPos = panel.userData.worldPosition;
         const dist = playerPos.distanceTo(panelWorldPos);
         if (dist < minDist) minDist = dist;
     }
@@ -314,16 +292,7 @@ export function updatePhoneRingVolume(camera, phonePositions) {
         if (dist < minDist) minDist = dist;
     }
 
-    let volume = 0;
-
-    if (minDist > PHONE_AUDIO_MAX_DIST) {
-        volume = 0;
-    } else if (minDist <= PHONE_AUDIO_CLOSE_DIST) {
-        volume = 1.0;
-    } else {
-        const normalizedDist = (minDist - PHONE_AUDIO_CLOSE_DIST) / (PHONE_AUDIO_MAX_DIST - PHONE_AUDIO_CLOSE_DIST);
-        volume = Math.pow(1 - normalizedDist, 3);
-    }
+    const volume = getPhoneRingVolume(minDist);
 
     phoneRingGainNode.gain.setTargetAtTime(volume, audioCtx.currentTime, 0.1);
 
@@ -331,10 +300,8 @@ export function updatePhoneRingVolume(camera, phonePositions) {
 }
 
 export function stopPhoneRing() {
-    if (phoneRingSource) {
-        phoneRingSource.stop();
-        phoneRingSource = null;
-    }
+    stopAudioSource(phoneRingSource);
+    phoneRingSource = null;
     if (phoneRingGainNode) {
         phoneRingGainNode.gain.value = 0;
     }
@@ -384,35 +351,9 @@ export function fadeAllAudioToSilence(duration) {
  * Stop all currently playing sounds
  */
 export function stopAllSounds() {
-    // Stop hum sound
-    if (humSource) {
-        try {
-            humSource.stop();
-        } catch (e) {
-            // Already stopped
-        }
-        humSource = null;
-    }
-
-    // Stop phone ring sound
-    if (phoneRingSource) {
-        try {
-            phoneRingSource.stop();
-        } catch (e) {
-            // Already stopped
-        }
-        phoneRingSource = null;
-    }
-
-    // Stop kids laugh sound
-    if (kidsLaughSource) {
-        try {
-            kidsLaughSource.stop();
-        } catch (e) {
-            // Already stopped
-        }
-        kidsLaughSource = null;
-    }
+    humSource = stopAndClearSource(humSource);
+    phoneRingSource = stopAndClearSource(phoneRingSource);
+    kidsLaughSource = stopAndClearSource(kidsLaughSource);
     isKidsLaughPlaying = false;
 
     // Reset gain nodes to zero
@@ -497,7 +438,6 @@ export function playPhonePickup() {
 
 export function playAmbientFootsteps(isStarted) {
     if (!isStarted || !audioCtx || !footstepsBuffer) {
-        setTimeout(() => playAmbientFootsteps(isStarted), 2000);
         return;
     }
     if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -506,14 +446,14 @@ export function playAmbientFootsteps(isStarted) {
     source.buffer = footstepsBuffer;
 
     const panner = audioCtx.createStereoPanner();
-    panner.pan.value = (Math.random() * 2) - 1;
+    panner.pan.value = randomBetween(-1, 1);
 
     const gainNode = audioCtx.createGain();
-    gainNode.gain.value = 0.3 + Math.random() * 0.5;
+    gainNode.gain.value = randomBetween(0.3, 0.8);
 
     const filter = audioCtx.createBiquadFilter();
     filter.type = 'lowpass';
-    filter.frequency.value = 600 + Math.random() * 800;
+    filter.frequency.value = randomBetween(600, 1400);
 
     source.connect(filter);
     filter.connect(gainNode);
@@ -521,12 +461,14 @@ export function playAmbientFootsteps(isStarted) {
     panner.connect(getDistortedOutput());
 
     source.start();
-
-    const nextFootsteps = 8000 + Math.random() * 17000;
-    setTimeout(() => playAmbientFootsteps(isStarted), nextFootsteps);
 }
 
 function makeDistortionCurve(amount) {
+    const cacheKey = Math.round(amount);
+    if (distortionCurveCache.has(cacheKey)) {
+        return distortionCurveCache.get(cacheKey);
+    }
+
     const samples = 44100;
     const curve = new Float32Array(samples);
     const deg = Math.PI / 180;
@@ -534,6 +476,8 @@ function makeDistortionCurve(amount) {
         const x = (i * 2) / samples - 1;
         curve[i] = ((3 + amount) * x * 20 * deg) / (Math.PI + amount * Math.abs(x));
     }
+
+    distortionCurveCache.set(cacheKey, curve);
     return curve;
 }
 
@@ -581,7 +525,6 @@ function startKidsLaughLoop() {
     kidsLaughGainNode.connect(getDistortedOutput());
 
     kidsLaughSource.start();
-    console.log('Kids laugh loop started');
 }
 
 /**
@@ -589,12 +532,7 @@ function startKidsLaughLoop() {
  */
 function stopKidsLaughLoop() {
     if (kidsLaughSource) {
-        try {
-            kidsLaughSource.stop();
-        } catch (e) {
-            // Already stopped
-        }
-        kidsLaughSource = null;
+        kidsLaughSource = stopAndClearSource(kidsLaughSource);
     }
     isKidsLaughPlaying = false;
 }
@@ -665,7 +603,7 @@ export function updateKidsLaughDistortion(sanity, debugSanityOverride) {
 
 export function playAmbientDoorClose(isStarted, playerSanity, debugSanityOverride) {
     if (!isStarted || !audioCtx || !doorCloseBuffer) {
-        return 15000 + Math.random() * 25000;
+        return randomBetween(15000, 40000);
     }
     if (audioCtx.state === 'suspended') audioCtx.resume();
 
@@ -676,14 +614,14 @@ export function playAmbientDoorClose(isStarted, playerSanity, debugSanityOverrid
     source.buffer = doorCloseBuffer;
 
     const panner = audioCtx.createStereoPanner();
-    panner.pan.value = (Math.random() * 2) - 1;
+    panner.pan.value = randomBetween(-1, 1);
 
     const gainNode = audioCtx.createGain();
-    gainNode.gain.value = 0.2 + Math.random() * 0.4;
+    gainNode.gain.value = randomBetween(0.2, 0.6);
 
     const filter = audioCtx.createBiquadFilter();
     filter.type = 'lowpass';
-    filter.frequency.value = 400 + Math.random() * 600;
+    filter.frequency.value = randomBetween(400, 1000);
 
     source.connect(filter);
     filter.connect(gainNode);
@@ -693,13 +631,37 @@ export function playAmbientDoorClose(isStarted, playerSanity, debugSanityOverrid
     source.start();
 
     // Door sounds play less frequently at low sanity (kids laugh takes over)
-    let nextDoor;
-    if (effectiveSanity <= 50) {
-        nextDoor = 25000 + Math.random() * 35000; // Less frequent when kids laugh is playing
-    } else {
-        nextDoor = 15000 + Math.random() * 25000;
+    return effectiveSanity <= 50
+        ? randomBetween(25000, 60000)
+        : randomBetween(15000, 40000);
+}
+
+function stopAudioSource(source) {
+    if (!source) {
+        return;
     }
 
-    // Return nextDoor for the caller to schedule the next call
-    return nextDoor;
+    try {
+        source.stop();
+    } catch (error) {
+        console.warn('Failed to stop audio source cleanly:', error);
+    }
+}
+
+function stopAndClearSource(source) {
+    stopAudioSource(source);
+    return null;
+}
+
+function getPhoneRingVolume(minDistance) {
+    if (minDistance > PHONE_AUDIO_MAX_DIST) {
+        return 0;
+    }
+
+    if (minDistance <= PHONE_AUDIO_CLOSE_DIST) {
+        return 1;
+    }
+
+    const normalizedDistance = (minDistance - PHONE_AUDIO_CLOSE_DIST) / (PHONE_AUDIO_MAX_DIST - PHONE_AUDIO_CLOSE_DIST);
+    return (1 - normalizedDistance) ** 3;
 }
