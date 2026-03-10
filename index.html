@@ -3,268 +3,765 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Backrooms - Level 0</title>
+    <title>Backrooms</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=IBM+Plex+Mono:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
-        :root { --yellow: #d1c28c; --dim-yellow: #a69a6d; }
-        body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', Courier, monospace; color: var(--yellow); }
-
-        #fps-counter {
-            position: fixed;
-            bottom: 20px; right: 20px;
-            color: var(--yellow);
-            font-size: 12px;
-            opacity: 0.5;
-            pointer-events: none;
-            z-index: 10;
-            display: none;
-            text-align: right;
+        :root {
+            --level-accent: #d9c98a;
+            --bg-void: #0a0a08;
+            --bg-panel: rgba(12, 12, 9, 0.92);
+            --border-dim: rgba(217, 201, 138, 0.12);
+            --border-hot: rgba(217, 201, 138, 0.4);
+            --text-main: #d4c97a;
+            --text-body: #a89e6e;
+            --text-ghost: rgba(164, 155, 100, 0.5);
+            --scanline: rgba(0, 0, 0, 0.06);
+            --glitch-offset: 2px;
         }
 
-        #start-screen {
-            position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: radial-gradient(circle at center, #1a1a10 0%, #000 100%);
-            display: flex; flex-direction: column; justify-content: center; align-items: center;
-            z-index: 100;
+        @keyframes flicker {
+            0%, 95%, 100% { opacity: 1; }
+            96% { opacity: 0.82; }
+            97% { opacity: 0.94; }
+            98% { opacity: 0.76; }
+            99% { opacity: 1; }
         }
-        .header { text-align: center; margin-bottom: 30px; }
-        .header h1 { font-size: 5rem; letter-spacing: 20px; margin: 0; font-weight: 100; }
-        .header p { opacity: 0.5; letter-spacing: 3px; font-size: 1rem; margin-top: 10px; }
 
-        .objective {
-            max-width: 600px;
-            text-align: center;
-            margin: 40px 0;
-            padding: 0 30px;
+        @keyframes drift {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-1px); }
+            75% { transform: translateX(1px); }
         }
-        .objective p {
-            font-size: 1.1rem;
-            line-height: 2;
+
+        @keyframes scanmove {
+            0% { background-position: 0 0; }
+            100% { background-position: 0 4px; }
+        }
+
+        @keyframes glitch-text {
+            0%, 92%, 100% { text-shadow: none; clip-path: none; }
+            93% { text-shadow: var(--glitch-offset) 0 #ff3333, calc(var(--glitch-offset) * -1) 0 #33ffff; clip-path: inset(20% 0 30% 0); }
+            95% { text-shadow: calc(var(--glitch-offset) * -1) 0 #ff3333, var(--glitch-offset) 0 #33ffff; clip-path: inset(60% 0 10% 0); }
+            97% { text-shadow: 1px 0 #ff3333, -1px 0 #33ffff; clip-path: none; }
+        }
+
+        @keyframes noise-bg {
+            0% { background-position: 0 0; }
+            10% { background-position: -5% -10%; }
+            20% { background-position: -15% 5%; }
+            30% { background-position: 7% -25%; }
+            40% { background-position: -5% 25%; }
+            50% { background-position: -15% 10%; }
+            60% { background-position: 15% 0%; }
+            70% { background-position: 0% 15%; }
+            80% { background-position: 3% 35%; }
+            90% { background-position: -10% 10%; }
+            100% { background-position: 0 0; }
+        }
+
+        @keyframes static-jitter {
+            0%, 100% { opacity: 0.04; }
+            50% { opacity: 0.07; }
+        }
+
+        @keyframes border-pulse {
+            0%, 100% { border-color: var(--border-dim); }
+            50% { border-color: color-mix(in srgb, var(--level-accent) 35%, transparent); }
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
             margin: 0;
-            opacity: 0.7;
-        }
-        .objective .highlight {
-            color: #ffcc44;
-            opacity: 1;
+            overflow: hidden;
+            background: var(--bg-void);
+            color: var(--text-main);
+            font-family: "IBM Plex Mono", "Courier New", monospace;
+            cursor: crosshair;
         }
 
         button {
-            background: transparent;
-            border: 1px solid var(--yellow);
-            color: var(--yellow);
-            padding: 15px 50px;
-            font-size: 1.2rem;
-            cursor: pointer;
-            transition: 0.3s;
-            letter-spacing: 5px;
-        }
-        button:hover {
-            background: var(--yellow);
-            color: #000;
+            font: inherit;
+            cursor: crosshair;
         }
 
-        .controls-hint {
-            margin: 20px 0;
-            opacity: 0.5;
-            font-size: 0.9rem;
-            letter-spacing: 2px;
-        }
-        .controls-hint p {
-            margin: 0;
+        /* ───── scanline overlay ───── */
+        #start-screen::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            z-index: 200;
+            pointer-events: none;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                var(--scanline) 2px,
+                var(--scanline) 4px
+            );
+            animation: scanmove 0.3s linear infinite;
         }
 
-        .credits {
-            margin-top: 40px;
-            text-align: center;
-            opacity: 0.6;
+        /* ───── noise grain overlay ───── */
+        #start-screen::after {
+            content: "";
+            position: fixed;
+            inset: -50%;
+            z-index: 199;
+            pointer-events: none;
+            opacity: 0.035;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+            background-size: 128px 128px;
+            animation: noise-bg 0.5s steps(5) infinite;
         }
-        .credits-header {
-            font-size: 0.7rem;
-            letter-spacing: 2px;
-            margin-bottom: 12px;
-            text-transform: uppercase;
-        }
-        .credits-logos {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 20px;
-        }
-        .credits-logos svg {
-            width: 50px;
-            height: 50px;
+
+        #fps-counter {
+            position: fixed;
+            right: 16px;
+            bottom: 16px;
+            z-index: 10;
+            display: none;
+            color: var(--text-ghost);
+            opacity: 0.7;
+            font-size: 11px;
+            letter-spacing: 0.18em;
+            text-align: right;
+            pointer-events: none;
+            font-family: "IBM Plex Mono", monospace;
         }
 
         #crosshair {
             position: fixed;
-            top: 50%; left: 50%;
-            width: 4px; height: 4px;
-            background: rgba(255,255,255,0.2);
-            border-radius: 50%;
+            top: 50%;
+            left: 50%;
+            display: none;
+            width: 3px;
+            height: 3px;
             transform: translate(-50%, -50%);
+            background: rgba(217, 201, 138, 0.5);
+            box-shadow: 0 0 8px rgba(217, 201, 138, 0.3), 0 0 24px rgba(217, 201, 138, 0.1);
+        }
+
+        /* ═══════════════════════════════════════════
+           START SCREEN
+           ═══════════════════════════════════════════ */
+        #start-screen {
+            position: fixed;
+            inset: 0;
+            z-index: 100;
+            display: grid;
+            place-items: center;
+            padding: 24px;
+            background:
+                radial-gradient(ellipse 60% 40% at 30% 20%, rgba(217, 201, 138, 0.04), transparent),
+                radial-gradient(ellipse 40% 60% at 80% 70%, rgba(217, 201, 138, 0.02), transparent),
+                var(--bg-void);
+            animation: flicker 8s ease-in-out infinite;
+        }
+
+        .menu-shell {
+            position: relative;
+            width: min(1200px, 100%);
+            max-height: 100%;
+            overflow: auto;
+            padding: 0;
+            border: 1px solid var(--border-dim);
+            background: var(--bg-panel);
+        }
+
+        /* top border accent line */
+        .menu-shell::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(
+                90deg,
+                transparent 0%,
+                color-mix(in srgb, var(--level-accent) 60%, transparent) 20%,
+                var(--level-accent) 50%,
+                color-mix(in srgb, var(--level-accent) 60%, transparent) 80%,
+                transparent 100%
+            );
+        }
+
+        .menu-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: end;
+            gap: 20px;
+            padding: 32px 36px 24px;
+            border-bottom: 1px solid var(--border-dim);
+        }
+
+        .eyebrow {
+            margin: 0 0 6px;
+            color: var(--text-ghost);
+            font-size: 0.65rem;
+            letter-spacing: 0.35em;
+            text-transform: uppercase;
+        }
+
+        .eyebrow::before {
+            content: "> ";
+            color: var(--level-accent);
+        }
+
+        .menu-header h1 {
+            margin: 0;
+            font-family: "Special Elite", "Courier New", monospace;
+            font-size: clamp(2.4rem, 5.5vw, 4.6rem);
+            line-height: 0.9;
+            letter-spacing: 0.22em;
+            font-weight: 400;
+            text-transform: uppercase;
+            color: var(--text-main);
+            animation: glitch-text 12s linear infinite;
+        }
+
+        .menu-header p {
+            margin: 8px 0 0;
+            max-width: 420px;
+            color: var(--text-body);
+            line-height: 1.5;
+            font-size: 0.82rem;
+        }
+
+        .controls-hint {
+            color: var(--text-ghost);
+            font-size: 0.68rem;
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
+            text-align: right;
+            line-height: 1.6;
+        }
+
+        .controls-hint::before {
+            content: "[SYS] ";
+            color: color-mix(in srgb, var(--level-accent) 50%, transparent);
+        }
+
+        #selection-view[hidden],
+        #detail-view[hidden] {
             display: none;
         }
 
-        /* Mobile touch controls */
-        #touch-controls {
-            display: none;
-            position: fixed;
+        /* ═══════════════════════════════════════════
+           LEVEL GRID – tile cards
+           ═══════════════════════════════════════════ */
+        #selection-view {
+            padding: 28px 36px 32px;
+        }
+
+        .level-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+        }
+
+        .level-tile {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            padding: 24px 22px;
+            min-height: 280px;
+            text-align: left;
+            border: 1px solid var(--border-dim);
+            background:
+                linear-gradient(170deg, rgba(217, 201, 138, 0.03) 0%, transparent 40%),
+                rgba(0, 0, 0, 0.2);
+            color: var(--text-main);
+            cursor: crosshair;
+            transition: border-color 0.2s ease, background 0.2s ease;
+            overflow: hidden;
+        }
+
+        /* corner cut decoration on tiles */
+        .level-tile::before {
+            content: "";
+            position: absolute;
             top: 0;
+            right: 0;
+            width: 28px;
+            height: 28px;
+            background: linear-gradient(225deg, var(--bg-void) 50%, transparent 50%);
+            border-bottom: 1px solid var(--border-dim);
+            border-left: 1px solid var(--border-dim);
+            z-index: 2;
+        }
+
+        .level-tile:not(.locked):hover {
+            border-color: color-mix(in srgb, var(--level-accent) 50%, transparent);
+            background:
+                linear-gradient(170deg, rgba(217, 201, 138, 0.06) 0%, transparent 40%),
+                rgba(0, 0, 0, 0.15);
+        }
+
+        .level-tile:not(.locked).selected {
+            border-color: var(--level-accent);
+            animation: border-pulse 3s ease-in-out infinite;
+        }
+
+        .level-tile:not(.locked).selected::after {
+            content: "";
+            position: absolute;
             bottom: 0;
             left: 0;
             right: 0;
+            height: 2px;
+            background: var(--level-accent);
+        }
+
+        /* ───── locked tile state ───── */
+        .level-tile.locked {
+            cursor: not-allowed;
+            opacity: 0.35;
+            filter: grayscale(0.6);
+        }
+
+        .level-tile.locked::after {
+            content: "SEALED";
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            font-size: 0.58rem;
+            letter-spacing: 0.3em;
+            color: var(--text-ghost);
+            text-transform: uppercase;
+            z-index: 3;
+        }
+
+        /* static noise on locked tiles */
+        .level-tile.locked .tile-static {
+            position: absolute;
+            inset: 0;
+            z-index: 1;
+            pointer-events: none;
+            opacity: 0.04;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 128 128' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.5' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+            background-size: 64px 64px;
+            animation: static-jitter 0.8s steps(3) infinite;
+        }
+
+        .level-badge,
+        .detail-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: fit-content;
+            padding: 4px 10px;
+            border: 1px solid color-mix(in srgb, var(--level-accent) 30%, transparent);
+            background: transparent;
+            color: var(--level-accent);
+            font-size: 0.6rem;
+            font-weight: 600;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+
+        .level-tile.locked .level-badge {
+            border-color: rgba(255, 255, 255, 0.08);
+            color: var(--text-ghost);
+        }
+
+        .level-name {
+            position: relative;
+            z-index: 1;
+            font-family: "Special Elite", "Courier New", monospace;
+            font-size: 1.4rem;
+            font-weight: 400;
+            line-height: 1.1;
+            letter-spacing: 0.06em;
+        }
+
+        .level-status {
+            position: relative;
+            z-index: 1;
+            color: var(--text-ghost);
+            font-size: 0.62rem;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+        }
+
+        .level-status::before {
+            content: "// ";
+        }
+
+        .level-teaser {
+            position: relative;
+            z-index: 1;
+            margin-top: auto;
+            color: var(--text-body);
+            font-size: 0.78rem;
+            line-height: 1.55;
+        }
+
+        .level-tile.locked .level-teaser {
+            color: var(--text-ghost);
+        }
+
+        /* ═══════════════════════════════════════════
+           DETAIL VIEW – dossier style
+           ═══════════════════════════════════════════ */
+        #detail-view {
+            padding: 28px 36px 32px;
+        }
+
+        .detail-panel {
+            display: grid;
+            gap: 0;
+            padding: 0;
+            border: 1px solid var(--border-dim);
+            background: transparent;
+        }
+
+        .detail-header {
+            display: grid;
+            gap: 8px;
+            padding: 28px 28px 24px;
+            border-bottom: 1px solid var(--border-dim);
+        }
+
+        .detail-header h2 {
+            margin: 0;
+            font-family: "Special Elite", "Courier New", monospace;
+            font-size: clamp(1.8rem, 3.5vw, 2.8rem);
+            line-height: 1;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            font-weight: 400;
+            animation: drift 6s ease-in-out infinite;
+        }
+
+        .detail-header p,
+        .detail-summary,
+        .detail-body p,
+        .detail-objective {
+            margin: 0;
+            color: var(--text-body);
+            line-height: 1.65;
+            font-size: 0.82rem;
+        }
+
+        .detail-columns {
+            display: grid;
+            grid-template-columns: 1fr 300px;
+            gap: 0;
+        }
+
+        .detail-copy {
+            display: grid;
+            gap: 12px;
+            padding: 24px 28px;
+            border-right: 1px solid var(--border-dim);
+        }
+
+        .detail-sidebar {
+            display: grid;
+            gap: 20px;
+            padding: 24px 28px;
+            align-content: start;
+        }
+
+        .detail-sidebar h3 {
+            margin: 0 0 8px;
+            font-size: 0.62rem;
+            color: var(--level-accent);
+            letter-spacing: 0.2em;
+            text-transform: uppercase;
+        }
+
+        .detail-sidebar h3::before {
+            content: "[ ";
+        }
+
+        .detail-sidebar h3::after {
+            content: " ]";
+        }
+
+        .detail-sidebar ul {
+            margin: 0;
+            padding-left: 16px;
+            color: var(--text-body);
+            line-height: 1.6;
+            font-size: 0.8rem;
+        }
+
+        .detail-sidebar ul li::marker {
+            color: var(--text-ghost);
+            content: "- ";
+        }
+
+        /* ═══════════════════════════════════════════
+           ACTIONS
+           ═══════════════════════════════════════════ */
+        .menu-actions {
+            display: flex;
+            gap: 0;
+            border-top: 1px solid var(--border-dim);
+        }
+
+        .primary-action,
+        .secondary-action {
+            padding: 18px 28px;
+            border-radius: 0;
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
+            cursor: crosshair;
+            font-size: 0.72rem;
+            font-weight: 600;
+            transition: background 0.15s ease, color 0.15s ease;
+        }
+
+        .primary-action {
+            flex: 1;
+            border: none;
+            border-right: 1px solid var(--border-dim);
+            background: color-mix(in srgb, var(--level-accent) 12%, transparent);
+            color: var(--level-accent);
+        }
+
+        .primary-action:hover {
+            background: color-mix(in srgb, var(--level-accent) 25%, transparent);
+            color: var(--text-main);
+        }
+
+        .secondary-action {
+            border: none;
+            background: transparent;
+            color: var(--text-ghost);
+        }
+
+        .secondary-action:hover {
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--text-body);
+        }
+
+        /* ═══════════════════════════════════════════
+           FOOTER
+           ═══════════════════════════════════════════ */
+        .menu-footer {
+            padding: 16px 36px;
+            border-top: 1px solid var(--border-dim);
+            color: var(--text-ghost);
+            font-size: 0.62rem;
+            letter-spacing: 0.06em;
+            line-height: 1.6;
+        }
+
+        .menu-footer::before {
+            content: "/* ";
+            color: color-mix(in srgb, var(--level-accent) 30%, transparent);
+        }
+
+        .menu-footer::after {
+            content: " */";
+            color: color-mix(in srgb, var(--level-accent) 30%, transparent);
+        }
+
+        /* ═══════════════════════════════════════════
+           TOUCH CONTROLS
+           ═══════════════════════════════════════════ */
+        #touch-controls {
+            display: none;
+            position: fixed;
+            inset: 0;
             height: 100%;
             pointer-events: none;
             z-index: 20;
         }
+
         #touch-controls.active {
             display: block;
         }
+
         .touch-zone {
             position: absolute;
             bottom: 20px;
             pointer-events: auto;
             touch-action: none;
         }
+
         #joystick-zone {
             left: 20px;
             width: 150px;
             height: 150px;
             z-index: 25;
         }
+
         #joystick-base {
             position: absolute;
+            top: 50%;
+            left: 50%;
             width: 120px;
             height: 120px;
-            border: 2px solid rgba(209, 194, 140, 0.3);
-            border-radius: 50%;
-            background: rgba(0, 0, 0, 0.3);
-            left: 50%;
-            top: 50%;
             transform: translate(-50%, -50%);
+            border: 1px solid rgba(217, 201, 138, 0.2);
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.4);
         }
+
         #joystick-stick {
             position: absolute;
+            top: 50%;
+            left: 50%;
             width: 50px;
             height: 50px;
-            background: rgba(209, 194, 140, 0.5);
-            border: 2px solid rgba(209, 194, 140, 0.6);
-            border-radius: 50%;
-            left: 50%;
-            top: 50%;
             transform: translate(-50%, -50%);
+            border: 1px solid color-mix(in srgb, var(--level-accent) 50%, transparent);
+            border-radius: 50%;
+            background: color-mix(in srgb, var(--level-accent) 20%, rgba(0, 0, 0, 0.3));
             transition: background 0.1s;
         }
+
         #joystick-stick.active {
-            background: rgba(209, 194, 140, 0.8);
+            background: color-mix(in srgb, var(--level-accent) 40%, rgba(0, 0, 0, 0.2));
         }
+
         #look-zone {
-            right: 0;
-            left: 0;
+            inset: 0;
             width: 100%;
             height: 100vh;
-            bottom: 0;
-            top: 0;
-            /* L-shape: exclude bottom-left 190x190 area for joystick */
-            clip-path: polygon(
-                0 0,
-                100% 0,
-                100% 100%,
-                190px 100%,
-                190px calc(100% - 190px),
-                0 calc(100% - 190px)
-            );
+            clip-path: polygon(0 0, 100% 0, 100% 100%, 190px 100%, 190px calc(100% - 190px), 0 calc(100% - 190px));
             z-index: 21;
         }
 
-        /* Mobile-specific adjustments */
-        @media (max-width: 768px) {
-            .header h1 { font-size: 2.5rem; letter-spacing: 10px; }
-            .header p { font-size: 0.8rem; }
-            .objective { padding: 0 20px; }
-            .objective p { font-size: 0.9rem; line-height: 1.8; }
-            button { padding: 12px 30px; font-size: 1rem; }
-            #fps-counter { bottom: 10px; right: 10px; font-size: 10px; }
+        /* ═══════════════════════════════════════════
+           SCROLLBAR
+           ═══════════════════════════════════════════ */
+        .menu-shell::-webkit-scrollbar {
+            width: 4px;
         }
 
+        .menu-shell::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .menu-shell::-webkit-scrollbar-thumb {
+            background: var(--border-dim);
+        }
+
+        /* ═══════════════════════════════════════════
+           RESPONSIVE
+           ═══════════════════════════════════════════ */
+        @media (max-width: 900px) {
+            .level-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        @media (max-width: 640px) {
+            .menu-header {
+                flex-direction: column;
+                align-items: start;
+                padding: 20px 20px 16px;
+            }
+
+            .controls-hint {
+                text-align: left;
+            }
+
+            #selection-view,
+            #detail-view {
+                padding: 16px 20px;
+            }
+
+            .level-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .level-tile {
+                min-height: 200px;
+            }
+
+            .detail-columns {
+                grid-template-columns: 1fr;
+            }
+
+            .detail-copy {
+                border-right: none;
+                border-bottom: 1px solid var(--border-dim);
+            }
+
+            .menu-footer {
+                padding: 12px 20px;
+            }
+
+            .menu-actions {
+                flex-direction: column;
+            }
+
+            .primary-action {
+                border-right: none;
+                border-bottom: 1px solid var(--border-dim);
+            }
+        }
     </style>
 </head>
 <body>
-
     <div id="start-screen">
-        <div class="header">
-            <h1>BACKROOMS</h1>
-            <p>LEVEL 0: THE LOBBY</p>
-        </div>
-        <div class="objective">
-            <p>
-                You have noclipped into the Backrooms.<br><br>
-                <span class="highlight">Find a telephone</span> hidden deep within the endless corridors and <span class="highlight">call for help</span> before your sanity drains completely.<br><br>
-                Move fast. The deeper you go, the closer you get to escape... or to being <span class="highlight">forever lost</span>.
-            </p>
-        </div>
-        <div id="controls-hint" class="controls-hint">
-            <p id="desktop-controls">WASD to move | Mouse to look</p>
-            <p id="mobile-controls" style="display: none;">Left joystick to move | Drag right side to look</p>
-        </div>
-        <button onclick="initGame()">ENTER THE BACKROOMS</button>
-        <div class="credits">
-            <div class="credits-header">Proudly Vibe Coded With</div>
-            <div class="credits-logos">
-                <!-- Claude AI Logo -->
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="#DA7756">
-                    <path d="m3.127 10.604 3.135-1.76.053-.153-.053-.085H6.11l-.525-.032-1.791-.048-1.554-.065-1.505-.08-.38-.081L0 7.832l.036-.234.32-.214.455.04 1.009.069 1.513.105 1.097.064 1.626.17h.259l.036-.105-.089-.065-.068-.064-1.566-1.062-1.695-1.121-.887-.646-.48-.327-.243-.306-.104-.67.435-.48.585.04.15.04.593.456 1.267.981 1.654 1.218.242.202.097-.068.012-.049-.109-.181-.9-1.626-.96-1.655-.428-.686-.113-.411a2 2 0 0 1-.068-.484l.496-.674L4.446 0l.662.089.279.242.411.94.666 1.48 1.033 2.014.302.597.162.553.06.17h.105v-.097l.085-1.134.157-1.392.154-1.792.052-.504.25-.605.497-.327.387.186.319.456-.045.294-.19 1.23-.37 1.93-.243 1.29h.142l.161-.16.654-.868 1.097-1.372.484-.545.565-.601.363-.287h.686l.505.751-.226.775-.707.895-.585.759-.839 1.13-.524.904.048.072.125-.012 1.897-.403 1.024-.186 1.223-.21.553.258.06.263-.218.536-1.307.323-1.533.307-2.284.54-.028.02.032.04 1.029.098.44.024h1.077l2.005.15.525.346.315.424-.053.323-.807.411-3.631-.863-.872-.218h-.12v.073l.726.71 1.331 1.202 1.667 1.55.084.383-.214.302-.226-.032-1.464-1.101-.565-.497-1.28-1.077h-.084v.113l.295.432 1.557 2.34.08.718-.112.234-.404.141-.444-.08-.911-1.28-.94-1.44-.759-1.291-.093.053-.448 4.821-.21.246-.484.186-.403-.307-.214-.496.214-.98.258-1.28.21-1.016.19-1.263.112-.42-.008-.028-.092.012-.953 1.307-1.448 1.957-1.146 1.227-.274.109-.477-.247.045-.44.266-.39 1.586-2.018.956-1.25.617-.723-.004-.105h-.036l-4.212 2.736-.75.096-.324-.302.04-.496.154-.162 1.267-.871z"/>
-                </svg>
-                <!-- Google Gemini Logo -->
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 65 65" fill="none">
-                    <mask id="gemini-mask" style="mask-type:alpha" maskUnits="userSpaceOnUse" x="0" y="0" width="65" height="65">
-                        <path d="M32.447 0c.68 0 1.273.465 1.439 1.125a38.904 38.904 0 001.999 5.905c2.152 5 5.105 9.376 8.854 13.125 3.751 3.75 8.126 6.703 13.125 8.855a38.98 38.98 0 005.906 1.999c.66.166 1.124.758 1.124 1.438 0 .68-.464 1.273-1.125 1.439a38.902 38.902 0 00-5.905 1.999c-5 2.152-9.375 5.105-13.125 8.854-3.749 3.751-6.702 8.126-8.854 13.125a38.973 38.973 0 00-2 5.906 1.485 1.485 0 01-1.438 1.124c-.68 0-1.272-.464-1.438-1.125a38.913 38.913 0 00-2-5.905c-2.151-5-5.103-9.375-8.854-13.125-3.75-3.749-8.125-6.702-13.125-8.854a38.973 38.973 0 00-5.905-2A1.485 1.485 0 010 32.448c0-.68.465-1.272 1.125-1.438a38.903 38.903 0 005.905-2c5-2.151 9.376-5.104 13.125-8.854 3.75-3.749 6.703-8.125 8.855-13.125a38.972 38.972 0 001.999-5.905A1.485 1.485 0 0132.447 0z" fill="#000"/>
-                        <path d="M32.447 0c.68 0 1.273.465 1.439 1.125a38.904 38.904 0 001.999 5.905c2.152 5 5.105 9.376 8.854 13.125 3.751 3.75 8.126 6.703 13.125 8.855a38.98 38.98 0 005.906 1.999c.66.166 1.124.758 1.124 1.438 0 .68-.464 1.273-1.125 1.439a38.902 38.902 0 00-5.905 1.999c-5 2.152-9.375 5.105-13.125 8.854-3.749 3.751-6.702 8.126-8.854 13.125a38.973 38.973 0 00-2 5.906 1.485 1.485 0 01-1.438 1.124c-.68 0-1.272-.464-1.438-1.125a38.913 38.913 0 00-2-5.905c-2.151-5-5.103-9.375-8.854-13.125-3.75-3.749-8.125-6.702-13.125-8.854a38.973 38.973 0 00-5.905-2A1.485 1.485 0 010 32.448c0-.68.465-1.272 1.125-1.438a38.903 38.903 0 005.905-2c5-2.151 9.376-5.104 13.125-8.854 3.75-3.749 6.703-8.125 8.855-13.125a38.972 38.972 0 001.999-5.905A1.485 1.485 0 0132.447 0z" fill="url(#gemini-gradient)"/>
-                    </mask>
-                    <g mask="url(#gemini-mask)">
-                        <g filter="url(#gemini-filter0)"><path d="M-5.859 50.734c7.498 2.663 16.116-2.33 19.249-11.152 3.133-8.821-.406-18.131-7.904-20.794-7.498-2.663-16.116 2.33-19.25 11.151-3.132 8.822.407 18.132 7.905 20.795z" fill="#FFE432"/></g>
-                        <g filter="url(#gemini-filter1)"><path d="M27.433 21.649c10.3 0 18.651-8.535 18.651-19.062 0-10.528-8.35-19.062-18.651-19.062S8.78-7.94 8.78 2.587c0 10.527 8.35 19.062 18.652 19.062z" fill="#FC413D"/></g>
-                        <g filter="url(#gemini-filter2)"><path d="M20.184 82.608c10.753-.525 18.918-12.244 18.237-26.174-.68-13.93-9.95-24.797-20.703-24.271C6.965 32.689-1.2 44.407-.519 58.337c.681 13.93 9.95 24.797 20.703 24.271z" fill="#00B95C"/></g>
-                        <g filter="url(#gemini-filter3)"><path d="M20.184 82.608c10.753-.525 18.918-12.244 18.237-26.174-.68-13.93-9.95-24.797-20.703-24.271C6.965 32.689-1.2 44.407-.519 58.337c.681 13.93 9.95 24.797 20.703 24.271z" fill="#00B95C"/></g>
-                        <g filter="url(#gemini-filter4)"><path d="M30.954 74.181c9.014-5.485 11.427-17.976 5.389-27.9-6.038-9.925-18.241-13.524-27.256-8.04-9.015 5.486-11.428 17.977-5.39 27.902 6.04 9.924 18.242 13.523 27.257 8.038z" fill="#00B95C"/></g>
-                        <g filter="url(#gemini-filter5)"><path d="M67.391 42.993c10.132 0 18.346-7.91 18.346-17.666 0-9.757-8.214-17.667-18.346-17.667s-18.346 7.91-18.346 17.667c0 9.757 8.214 17.666 18.346 17.666z" fill="#3186FF"/></g>
-                        <g filter="url(#gemini-filter6)"><path d="M-13.065 40.944c9.33 7.094 22.959 4.869 30.442-4.972 7.483-9.84 5.987-23.569-3.343-30.663C4.704-1.786-8.924.439-16.408 10.28c-7.483 9.84-5.986 23.57 3.343 30.664z" fill="#FBBC04"/></g>
-                        <g filter="url(#gemini-filter7)"><path d="M34.74 51.43c11.135 7.656 25.896 5.524 32.968-4.764 7.073-10.287 3.779-24.832-7.357-32.488C49.215 6.52 34.455 8.654 27.382 18.94c-7.072 10.288-3.779 24.833 7.357 32.49z" fill="#3186FF"/></g>
-                        <g filter="url(#gemini-filter8)"><path d="M54.984-2.336c2.833 3.852-.808 11.34-8.131 16.727-7.324 5.387-15.557 6.631-18.39 2.78-2.833-3.853.807-11.342 8.13-16.728 7.324-5.387 15.558-6.631 18.39-2.78z" fill="#749BFF"/></g>
-                        <g filter="url(#gemini-filter9)"><path d="M31.727 16.104C43.053 5.598 46.94-8.626 40.41-15.666c-6.53-7.04-21.006-4.232-32.332 6.274s-15.214 24.73-8.683 31.77c6.53 7.04 21.006 4.232 32.332-6.274z" fill="#FC413D"/></g>
-                        <g filter="url(#gemini-filter10)"><path d="M8.51 53.838c6.732 4.818 14.46 5.55 17.262 1.636 2.802-3.915-.384-10.994-7.116-15.812-6.731-4.818-14.46-5.55-17.261-1.636-2.802 3.915.383 10.994 7.115 15.812z" fill="#FFEE48"/></g>
-                    </g>
-                    <defs>
-                        <filter id="gemini-filter0" x="-19.824" y="13.152" width="39.274" height="43.217" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur stdDeviation="2.46" result="effect1_foregroundBlur"/></filter>
-                        <filter id="gemini-filter1" x="-15.001" y="-40.257" width="84.868" height="85.688" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur stdDeviation="11.891" result="effect1_foregroundBlur"/></filter>
-                        <filter id="gemini-filter2" x="-20.776" y="11.927" width="79.454" height="90.916" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur stdDeviation="10.109" result="effect1_foregroundBlur"/></filter>
-                        <filter id="gemini-filter3" x="-20.776" y="11.927" width="79.454" height="90.916" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur stdDeviation="10.109" result="effect1_foregroundBlur"/></filter>
-                        <filter id="gemini-filter4" x="-19.845" y="15.459" width="79.731" height="81.505" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur stdDeviation="10.109" result="effect1_foregroundBlur"/></filter>
-                        <filter id="gemini-filter5" x="29.832" y="-11.552" width="75.117" height="73.758" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur stdDeviation="9.606" result="effect1_foregroundBlur"/></filter>
-                        <filter id="gemini-filter6" x="-38.583" y="-16.253" width="78.135" height="78.758" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur stdDeviation="8.706" result="effect1_foregroundBlur"/></filter>
-                        <filter id="gemini-filter7" x="8.107" y="-5.966" width="78.877" height="77.539" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur stdDeviation="7.775" result="effect1_foregroundBlur"/></filter>
-                        <filter id="gemini-filter8" x="13.587" y="-18.488" width="56.272" height="51.81" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur stdDeviation="6.957" result="effect1_foregroundBlur"/></filter>
-                        <filter id="gemini-filter9" x="-15.526" y="-31.297" width="70.856" height="69.306" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur stdDeviation="5.876" result="effect1_foregroundBlur"/></filter>
-                        <filter id="gemini-filter10" x="-14.168" y="20.964" width="55.501" height="51.571" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur stdDeviation="7.273" result="effect1_foregroundBlur"/></filter>
-                        <linearGradient id="gemini-gradient" x1="18.447" y1="43.42" x2="52.153" y2="15.004" gradientUnits="userSpaceOnUse"><stop stop-color="#4893FC"/><stop offset=".27" stop-color="#4893FC"/><stop offset=".777" stop-color="#969DFF"/><stop offset="1" stop-color="#BD99FE"/></linearGradient>
-                    </defs>
-                </svg>
+        <div class="menu-shell">
+            <div class="menu-header">
+                <div>
+                    <p class="eyebrow">Recursive Access Terminal</p>
+                    <h1 id="menu-title">BACKROOMS</h1>
+                    <p id="menu-subtitle">Choose your descent</p>
+                </div>
+                <div id="controls-hint" class="controls-hint">
+                    <p id="desktop-controls">WASD to move | Mouse to look | E to answer</p>
+                    <p id="mobile-controls" style="display: none;">Left joystick to move | Drag to look | Tap the phone</p>
+                </div>
             </div>
+
+            <section id="selection-view">
+                <div id="level-grid" class="level-grid"></div>
+            </section>
+
+            <section id="detail-view" hidden>
+                <div class="detail-panel">
+                    <div class="detail-header">
+                        <span id="detail-badge" class="detail-badge"></span>
+                        <h2 id="detail-heading"></h2>
+                        <p id="detail-tagline"></p>
+                        <p id="detail-summary" class="detail-summary"></p>
+                    </div>
+
+                    <div class="detail-columns">
+                        <div id="detail-body" class="detail-copy"></div>
+                        <aside class="detail-sidebar">
+                            <div>
+                                <h3>Objective</h3>
+                                <p id="detail-objective" class="detail-objective"></p>
+                            </div>
+                            <div>
+                                <h3>What this level does</h3>
+                                <ul id="detail-features"></ul>
+                            </div>
+                        </aside>
+                    </div>
+
+                    <div class="menu-actions">
+                        <button id="launch-level" class="primary-action" type="button">Enter</button>
+                        <button id="back-to-selection" class="secondary-action" type="button">Back to level wall</button>
+                    </div>
+                </div>
+            </section>
+
+            <div class="menu-footer">Current build supports themed runtime loading for multiple backroom types. Future levels can extend rules, geometry, audio, and art independently.</div>
         </div>
-        <script>
-            // Show appropriate control hints
-            const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-            if (isTouchDevice) {
-                document.getElementById('desktop-controls').style.display = 'none';
-                document.getElementById('mobile-controls').style.display = 'block';
-            }
-        </script>
     </div>
 
     <div id="fps-counter">FPS: <span id="fps-val">0</span></div>
     <div id="crosshair"></div>
 
-    <!-- Mobile touch controls -->
     <div id="touch-controls">
         <div id="joystick-zone" class="touch-zone">
             <div id="joystick-base">
