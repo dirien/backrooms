@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { CHUNK_SIZE, RENDER_DIST, PRELOAD_DIST, PHONE_EXCLUSION_DIST } from './constants.js';
 
 /**
@@ -11,7 +12,22 @@ const tempChunkBounds = new THREE.Box3();
 const tempChunkMin = new THREE.Vector3();
 const tempChunkMax = new THREE.Vector3();
 const tempWallBounds = new THREE.Box3();
+const tempWallCenter = new THREE.Vector3();
+const tempWallSize = new THREE.Vector3();
+const tempPanelMatrix = new THREE.Matrix4();
+const tempPanelPosition = new THREE.Vector3();
+const tempPanelQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, 0, 0));
+const tempPanelScale = new THREE.Vector3(1, 1, 1);
 const tempShuffleArray = [];
+const tempLineWalls = [];
+
+const GRID_SIZE = 3;
+const CELL_SIZE = CHUNK_SIZE / GRID_SIZE;
+const WALL_THICKNESS = 0.3;
+const WALL_HEIGHT = 3;
+const WALL_LENGTH_V = CELL_SIZE + 0.31;
+const WALL_LENGTH_H = CELL_SIZE - 0.01;
+const SPATIAL_CELL_SIZE = CELL_SIZE;
 
 function seededRandom(seed) {
     let state = seed;
@@ -227,11 +243,30 @@ function addFloorAndCeiling(group, resources) {
     addStaticMesh(group, ceiling, []);
 }
 
-function addWallsToChunk(group, chunkState, wallMaterial, wallGeometry, positions) {
+function addMergedWallsToChunk(group, wallMaterial, wallGeometry, positions) {
+    if (positions.length === 0) {
+        return;
+    }
+
+    const geometries = positions.map((position) => wallGeometry.clone().translate(position.x, position.y, position.z));
+    const mergedGeometry = mergeGeometries(geometries, false);
+    geometries.forEach((geometry) => geometry.dispose());
+
+    const wallMesh = new THREE.Mesh(mergedGeometry, wallMaterial);
+    addStaticMesh(group, wallMesh, [], { castShadow: true, receiveShadow: true });
+}
+
+function addWallCollisionRecords(chunkState, positions, cx, cz, wallSize) {
     for (const position of positions) {
-        const wall = new THREE.Mesh(wallGeometry, wallMaterial);
-        wall.position.copy(position);
-        addStaticMesh(group, wall, chunkState.walls, { castShadow: true, receiveShadow: true });
+        tempWallCenter.set(cx * CHUNK_SIZE + position.x, position.y, cz * CHUNK_SIZE + position.z);
+        tempWallSize.copy(wallSize);
+
+        chunkState.walls.push({
+            userData: {
+                worldBox: new THREE.Box3().setFromCenterAndSize(tempWallCenter, tempWallSize),
+                worldCenter: tempWallCenter.clone(),
+            },
+        });
     }
 }
 
@@ -262,19 +297,38 @@ function buildWallPositions(horizontalWalls, verticalWalls, gridSize, cellSize) 
     return { horizontalPositions, verticalPositions };
 }
 
-function addLightPanels(group, chunkState, resources, gridSize, cellSize) {
+function addLightPanels(group, chunkState, resources, gridSize, cellSize, cx, cz) {
+    const panelCount = gridSize * gridSize;
+    const panels = new THREE.InstancedMesh(resources.lightPanelGeo, resources.lightPanelMat, panelCount);
+    panels.matrixAutoUpdate = false;
+    panels.frustumCulled = false;
+
+    let panelIndex = 0;
+
     for (let x = 0; x < gridSize; x++) {
         for (let z = 0; z < gridSize; z++) {
-            const panel = new THREE.Mesh(resources.lightPanelGeo, resources.lightPanelMat);
-            panel.position.set(
+            tempPanelPosition.set(
                 -CHUNK_SIZE / 2 + x * cellSize + cellSize / 2,
                 2.99,
                 -CHUNK_SIZE / 2 + z * cellSize + cellSize / 2,
             );
-            panel.rotation.x = Math.PI / 2;
-            addStaticMesh(group, panel, chunkState.lightPanels);
+            tempPanelMatrix.compose(tempPanelPosition, tempPanelQuaternion, tempPanelScale);
+            panels.setMatrixAt(panelIndex, tempPanelMatrix);
+            chunkState.lightPanels.push({
+                userData: {
+                    worldPosition: new THREE.Vector3(
+                        cx * CHUNK_SIZE + tempPanelPosition.x,
+                        tempPanelPosition.y,
+                        cz * CHUNK_SIZE + tempPanelPosition.z,
+                    ),
+                },
+            });
+            panelIndex++;
         }
     }
+
+    panels.instanceMatrix.needsUpdate = true;
+    group.add(panels);
 }
 
 function buildWallsInChunk(horizontalWalls, verticalWalls, gridSize, cellSize, group, debugNormals) {
@@ -427,18 +481,6 @@ function addPropsToChunk(group, chunkState, wallsInChunk, cx, cz, resources, deb
     }
 }
 
-function cacheChunkWorldData(group, chunkState) {
-    group.updateMatrixWorld(true);
-
-    for (const wall of chunkState.walls) {
-        wall.userData.worldBox = new THREE.Box3().setFromObject(wall);
-    }
-
-    for (const panel of chunkState.lightPanels) {
-        panel.userData.worldPosition = panel.getWorldPosition(new THREE.Vector3());
-    }
-}
-
 function attachChunkState(group, chunkState, border) {
     group.userData.border = border;
     group.userData.lightPanels = chunkState.lightPanels;
@@ -458,15 +500,17 @@ function mergeChunkCollections(chunkState, walls, lightPanels, phonePositions, p
 export function generateChunk(cx, cz, scene, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes) {
     const group = new THREE.Group();
     const chunkState = createChunkState();
-    const gridSize = 3;
-    const cellSize = CHUNK_SIZE / gridSize;
+    const gridSize = GRID_SIZE;
+    const cellSize = CELL_SIZE;
     const { horizontalWalls, verticalWalls } = generateWallGrid(cx, cz, gridSize);
     const { horizontalPositions, verticalPositions } = buildWallPositions(horizontalWalls, verticalWalls, gridSize, cellSize);
 
     addFloorAndCeiling(group, resources);
-    addWallsToChunk(group, chunkState, resources.wallMat, resources.wallGeoV, verticalPositions);
-    addWallsToChunk(group, chunkState, resources.wallMat, resources.wallGeoH, horizontalPositions);
-    addLightPanels(group, chunkState, resources, gridSize, cellSize);
+    addMergedWallsToChunk(group, resources.wallMat, resources.wallGeoV, verticalPositions);
+    addMergedWallsToChunk(group, resources.wallMat, resources.wallGeoH, horizontalPositions);
+    addWallCollisionRecords(chunkState, verticalPositions, cx, cz, tempWallSize.set(WALL_THICKNESS, WALL_HEIGHT, WALL_LENGTH_V));
+    addWallCollisionRecords(chunkState, horizontalPositions, cx, cz, tempWallSize.set(WALL_LENGTH_H, WALL_HEIGHT, WALL_THICKNESS));
+    addLightPanels(group, chunkState, resources, gridSize, cellSize, cx, cz);
 
     const wallsInChunk = buildWallsInChunk(horizontalWalls, verticalWalls, gridSize, cellSize, group, debugNormals);
     addPropsToChunk(group, chunkState, wallsInChunk, cx, cz, resources, debugNormals, debugMode);
@@ -478,7 +522,6 @@ export function generateChunk(cx, cz, scene, resources, debugMode, debugNormals,
     scene.add(border);
     chunkBorders.push(border);
 
-    cacheChunkWorldData(group, chunkState);
     attachChunkState(group, chunkState, border);
     mergeChunkCollections(chunkState, walls, lightPanels, phonePositions, phoneMeshes);
 
@@ -498,26 +541,26 @@ function isChunkPotentiallyVisible(cx, cz) {
     return frustum.intersectsBox(tempChunkBounds);
 }
 
-function isChunkNearby(cx, cz, playerChunkX, playerChunkZ) {
+function isChunkNearby(cx, cz, playerChunkX, playerChunkZ, renderDist) {
     const dx = Math.abs(cx - playerChunkX);
     const dz = Math.abs(cz - playerChunkZ);
-    return dx <= RENDER_DIST && dz <= RENDER_DIST;
+    return dx <= renderDist && dz <= renderDist;
 }
 
-function isChunkInPreloadRange(cx, cz, playerChunkX, playerChunkZ) {
+function isChunkInPreloadRange(cx, cz, playerChunkX, playerChunkZ, preloadDist) {
     const dx = Math.abs(cx - playerChunkX);
     const dz = Math.abs(cz - playerChunkZ);
-    return dx <= PRELOAD_DIST && dz <= PRELOAD_DIST;
+    return dx <= preloadDist && dz <= preloadDist;
 }
 
-function getActiveChunkKeys(playerChunkX, playerChunkZ) {
+function getActiveChunkKeys(playerChunkX, playerChunkZ, renderDist, preloadDist) {
     const activeKeys = new Set();
 
-    for (let x = playerChunkX - PRELOAD_DIST; x <= playerChunkX + PRELOAD_DIST; x++) {
-        for (let z = playerChunkZ - PRELOAD_DIST; z <= playerChunkZ + PRELOAD_DIST; z++) {
-            const isNearby = isChunkNearby(x, z, playerChunkX, playerChunkZ);
+    for (let x = playerChunkX - preloadDist; x <= playerChunkX + preloadDist; x++) {
+        for (let z = playerChunkZ - preloadDist; z <= playerChunkZ + preloadDist; z++) {
+            const isNearby = isChunkNearby(x, z, playerChunkX, playerChunkZ, renderDist);
             const isPotentiallyVisible = isChunkPotentiallyVisible(x, z);
-            const inPreloadRange = isChunkInPreloadRange(x, z, playerChunkX, playerChunkZ);
+            const inPreloadRange = isChunkInPreloadRange(x, z, playerChunkX, playerChunkZ, preloadDist);
 
             if (isNearby || (isPotentiallyVisible && inPreloadRange)) {
                 activeKeys.add(`${x},${z}`);
@@ -529,6 +572,8 @@ function getActiveChunkKeys(playerChunkX, playerChunkZ) {
 }
 
 function addMissingChunks(activeKeys, scene, chunks, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes) {
+    let changed = false;
+
     for (const key of activeKeys) {
         if (chunks.has(key)) {
             continue;
@@ -539,7 +584,10 @@ function addMissingChunks(activeKeys, scene, chunks, resources, debugMode, debug
             key,
             generateChunk(chunkX, chunkZ, scene, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes),
         );
+        changed = true;
     }
+
+    return changed;
 }
 
 function removeTrackedItems(list, items) {
@@ -566,24 +614,116 @@ function removeChunk(scene, key, chunk, chunks, chunkBorders, walls, lightPanels
     }
 }
 
-export function updateChunks(camera, scene, chunks, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes) {
+export function updateChunks(camera, scene, chunks, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes, settings = {}) {
     const playerChunkX = Math.floor(camera.position.x / CHUNK_SIZE);
     const playerChunkZ = Math.floor(camera.position.z / CHUNK_SIZE);
+    const renderDist = settings.renderDist ?? RENDER_DIST;
+    const preloadDist = settings.preloadDist ?? PRELOAD_DIST;
+    let changed = false;
 
     frustumMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     frustum.setFromProjectionMatrix(frustumMatrix);
 
-    const activeKeys = getActiveChunkKeys(playerChunkX, playerChunkZ);
-    addMissingChunks(activeKeys, scene, chunks, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes);
+    const activeKeys = getActiveChunkKeys(playerChunkX, playerChunkZ, renderDist, preloadDist);
+    changed = addMissingChunks(activeKeys, scene, chunks, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes);
 
     for (const [key, chunk] of chunks.entries()) {
         if (!activeKeys.has(key)) {
             removeChunk(scene, key, chunk, chunks, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes);
+            changed = true;
+        }
+    }
+
+    return {
+        changed,
+        playerChunkX,
+        playerChunkZ,
+    };
+}
+
+function getSpatialCellKey(cellX, cellZ) {
+    return `${cellX},${cellZ}`;
+}
+
+function getSpatialCell(value, cellSize) {
+    return Math.floor(value / cellSize);
+}
+
+function addWallToSpatialCell(index, cellX, cellZ, wall) {
+    const key = getSpatialCellKey(cellX, cellZ);
+    let cellWalls = index.cells.get(key);
+
+    if (!cellWalls) {
+        cellWalls = [];
+        index.cells.set(key, cellWalls);
+    }
+
+    cellWalls.push(wall);
+}
+
+export function createWallSpatialIndex(cellSize = SPATIAL_CELL_SIZE) {
+    return {
+        cellSize,
+        cells: new Map(),
+    };
+}
+
+export function rebuildWallSpatialIndex(index, walls) {
+    index.cells.clear();
+
+    for (const wall of walls) {
+        const box = wall.userData.worldBox;
+        const minCellX = getSpatialCell(box.min.x, index.cellSize);
+        const maxCellX = getSpatialCell(box.max.x, index.cellSize);
+        const minCellZ = getSpatialCell(box.min.z, index.cellSize);
+        const maxCellZ = getSpatialCell(box.max.z, index.cellSize);
+
+        for (let cellX = minCellX; cellX <= maxCellX; cellX++) {
+            for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ++) {
+                addWallToSpatialCell(index, cellX, cellZ, wall);
+            }
         }
     }
 }
 
-export function hasLineOfSight(fromX, fromZ, toX, toZ, walls) {
+export function queryWallsNearBox(index, box, target = []) {
+    target.length = 0;
+    const seen = new Set();
+    const minCellX = getSpatialCell(box.min.x, index.cellSize);
+    const maxCellX = getSpatialCell(box.max.x, index.cellSize);
+    const minCellZ = getSpatialCell(box.min.z, index.cellSize);
+    const maxCellZ = getSpatialCell(box.max.z, index.cellSize);
+
+    for (let cellX = minCellX; cellX <= maxCellX; cellX++) {
+        for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ++) {
+            const cellWalls = index.cells.get(getSpatialCellKey(cellX, cellZ));
+            if (!cellWalls) {
+                continue;
+            }
+
+            for (const wall of cellWalls) {
+                if (seen.has(wall)) {
+                    continue;
+                }
+
+                seen.add(wall);
+                target.push(wall);
+            }
+        }
+    }
+
+    return target;
+}
+
+export function queryWallsAlongSegment(index, fromX, fromZ, toX, toZ, target = []) {
+    tempChunkMin.set(Math.min(fromX, toX), 0, Math.min(fromZ, toZ));
+    tempChunkMax.set(Math.max(fromX, toX), WALL_HEIGHT, Math.max(fromZ, toZ));
+    tempChunkBounds.min.copy(tempChunkMin);
+    tempChunkBounds.max.copy(tempChunkMax);
+    return queryWallsNearBox(index, tempChunkBounds, target);
+}
+
+export function hasLineOfSight(fromX, fromZ, toX, toZ, walls, wallSpatialIndex = null) {
     const dirX = toX - fromX;
     const dirZ = toZ - fromZ;
     const rayLength = Math.hypot(dirX, dirZ);
@@ -595,7 +735,9 @@ export function hasLineOfSight(fromX, fromZ, toX, toZ, walls) {
     const normX = dirX / rayLength;
     const normZ = dirZ / rayLength;
 
-    for (const wall of walls) {
+    const wallsToCheck = wallSpatialIndex ? queryWallsAlongSegment(wallSpatialIndex, fromX, fromZ, toX, toZ, tempLineWalls) : walls;
+
+    for (const wall of wallsToCheck) {
         tempWallBounds.copy(wall.userData.worldBox);
 
         const minX = tempWallBounds.min.x;

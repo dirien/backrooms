@@ -24,6 +24,22 @@ let phoneInteractPromptMesh = null;
 let phoneInteractCanvas = null;
 let phoneInteractCtx = null;
 let phoneInteractTexture = null;
+let lastSanityPercent = null;
+let lastSanityColorBand = null;
+
+const SANITY_COLORS = {
+    critical: new THREE.Color(0xff4444),
+    low: new THREE.Color(0xff8844),
+    warning: new THREE.Color(0xffcc44),
+    normal: new THREE.Color(0xd1c28c),
+};
+
+const SANITY_TEXT_COLORS = {
+    critical: 'rgba(255, 68, 68, 1)',
+    low: 'rgba(255, 136, 68, 1)',
+    warning: 'rgba(255, 204, 68, 1)',
+    normal: 'rgba(209, 194, 140, 0.9)',
+};
 
 export function getHudScene() {
     return hudScene;
@@ -158,41 +174,24 @@ export function updateHUDSanity(sanity) {
     if (!hudScene) return;
 
     const percent = sanity / 100;
+    const roundedSanity = Math.round(sanity);
+    const colorBand = getSanityColorBand(sanity);
+    const colorBandChanged = colorBand !== lastSanityColorBand;
     const originalWidth = sanityBarFill.userData.originalWidth;
     const originalX = sanityBarFill.userData.originalX;
 
     sanityBarFill.scale.x = Math.max(0.001, percent);
     sanityBarFill.position.x = originalX - (originalWidth / 2) * (1 - percent);
 
-    let barColor;
-    if (sanity <= 10) {
-        barColor = new THREE.Color(0xff4444);
-    } else if (sanity <= 30) {
-        barColor = new THREE.Color(0xff8844);
-    } else if (sanity <= 50) {
-        barColor = new THREE.Color(0xffcc44);
-    } else {
-        barColor = new THREE.Color(0xd1c28c);
-    }
-    sanityBarFill.material.color = barColor;
-
-    sanityPercentCtx.clearRect(0, 0, 256, 128);
-
-    let textColor;
-    if (sanity <= 10) {
-        textColor = 'rgba(255, 68, 68, 1)';
-    } else if (sanity <= 30) {
-        textColor = 'rgba(255, 136, 68, 1)';
-    } else if (sanity <= 50) {
-        textColor = 'rgba(255, 204, 68, 1)';
-    } else {
-        textColor = 'rgba(209, 194, 140, 0.9)';
+    if (colorBandChanged) {
+        sanityBarFill.material.color.copy(SANITY_COLORS[colorBand]);
+        lastSanityColorBand = colorBand;
     }
 
-    sanityPercentCtx.font = '700 52px "Courier New", Courier, monospace';
-    sanityPercentCtx.fillStyle = textColor;
-    sanityPercentCtx.fillText(Math.round(sanity) + '%', 15, 75);
-    sanityPercentTexture.needsUpdate = true;
+    if (roundedSanity !== lastSanityPercent || colorBandChanged) {
+        redrawSanityPercent(roundedSanity, SANITY_TEXT_COLORS[colorBand]);
+        lastSanityPercent = roundedSanity;
+    }
 
     // Pulsing effect at low sanity
     if (sanity <= 10) {
@@ -204,6 +203,30 @@ export function updateHUDSanity(sanity) {
     } else {
         sanityBarFill.material.opacity = 0.9;
     }
+}
+
+function getSanityColorBand(sanity) {
+    if (sanity <= 10) {
+        return 'critical';
+    }
+
+    if (sanity <= 30) {
+        return 'low';
+    }
+
+    if (sanity <= 50) {
+        return 'warning';
+    }
+
+    return 'normal';
+}
+
+function redrawSanityPercent(sanity, textColor) {
+    sanityPercentCtx.clearRect(0, 0, 256, 128);
+    sanityPercentCtx.font = '700 52px "Courier New", Courier, monospace';
+    sanityPercentCtx.fillStyle = textColor;
+    sanityPercentCtx.fillText(`${sanity}%`, 15, 75);
+    sanityPercentTexture.needsUpdate = true;
 }
 
 export function updateHUDCamera(playerSanity) {
@@ -265,6 +288,8 @@ export function hideHUD() {
     if (hudScene) {
         hudScene.visible = false;
     }
+    lastSanityPercent = null;
+    lastSanityColorBand = null;
 }
 
 export function setMobileHUD(isMobile) {

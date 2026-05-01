@@ -260,16 +260,19 @@ export async function loadKidsLaughSound() {
 export function updateHumVolume(camera, lightPanels) {
     if (!humGainNode || !camera || lightPanels.length === 0) return;
 
-    let minDist = Infinity;
+    let minDistSq = Infinity;
     const playerPos = camera.position;
+    const maxDist = 5;
+    const maxDistSq = maxDist * maxDist;
 
     for (const panel of lightPanels) {
         const panelWorldPos = panel.userData.worldPosition;
-        const dist = playerPos.distanceTo(panelWorldPos);
-        if (dist < minDist) minDist = dist;
+        const distSq = playerPos.distanceToSquared(panelWorldPos);
+        if (distSq < minDistSq) minDistSq = distSq;
+        if (minDistSq <= maxDistSq * 0.04) break;
     }
 
-    const maxDist = 5;
+    const minDist = Math.sqrt(minDistSq);
     const proximity = Math.max(0, 1 - (minDist / maxDist));
     const volume = 0.18 + proximity * 0.54;
 
@@ -284,14 +287,17 @@ export function updatePhoneRingVolume(camera, phonePositions) {
         return Infinity;
     }
 
-    let minDist = Infinity;
+    let minDistSq = Infinity;
     const playerPos = camera.position;
+    const maxDistSq = PHONE_AUDIO_MAX_DIST * PHONE_AUDIO_MAX_DIST;
 
     for (const phonePos of phonePositions) {
-        const dist = playerPos.distanceTo(phonePos);
-        if (dist < minDist) minDist = dist;
+        const distSq = playerPos.distanceToSquared(phonePos);
+        if (distSq < minDistSq) minDistSq = distSq;
+        if (minDistSq <= PHONE_AUDIO_CLOSE_DIST * PHONE_AUDIO_CLOSE_DIST) break;
     }
 
+    const minDist = minDistSq > maxDistSq ? PHONE_AUDIO_MAX_DIST : Math.sqrt(minDistSq);
     const volume = getPhoneRingVolume(minDist);
 
     phoneRingGainNode.gain.setTargetAtTime(volume, audioCtx.currentTime, 0.1);

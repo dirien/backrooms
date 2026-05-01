@@ -86,7 +86,7 @@ function createWallGeometry(width, height, depth) {
 }
 
 function loadCeilingTexture(loader) {
-    const texture = loader.load('/graphics/ceiling-tile.png');
+    const texture = loader.load('/graphics/ceiling-tile.webp');
     texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
     return texture;
 }
@@ -153,7 +153,7 @@ export function createGlobalResources(theme) {
     }
 
     if (!wallTexture) {
-        wallTexture = textureLoader.load('/graphics/wallpaper.png');
+        wallTexture = textureLoader.load('/graphics/wallpaper.webp');
         wallTexture.wrapS = wallTexture.wrapT = THREE.RepeatWrapping;
         wallTexture.repeat.set(1, 1);
     }
