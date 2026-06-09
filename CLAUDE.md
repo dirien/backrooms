@@ -19,12 +19,13 @@ npm run preview
 
 ## Architecture
 
-The app is a small ES module game, not a framework app. `index.html` loads `src/main.js`, which initializes rendering, audio, input, chunk streaming, HUD, and the main loop.
+The app is a small ES module game, not a framework app. `index.html` loads `src/main.js`, a thin entry that renders the level menu and dynamically imports `src/runtime.js` when a level starts. Keep Three.js imports out of the menu path so the entry chunk stays small; Vite emits manual chunks for Three.js and postprocessing (see `vite.config.js`).
 
 ### Core modules
 
-- `src/main.js`: Runtime orchestration, animation loop, sanity drain, transitions, restart flow.
-- `src/world.js`: Procedural chunk generation, chunk add/remove, static world-data caching, line-of-sight tests.
+- `src/main.js`: Menu bootstrap only. Lazy-loads the runtime on level start.
+- `src/runtime.js`: Runtime orchestration, animation loop, sanity drain, transitions, restart flow, quality presets, profiling hooks.
+- `src/world.js`: Procedural chunk generation, chunk add/remove and resource disposal, static world-data caching, wall spatial index, line-of-sight tests.
 - `src/audio.js`: Web Audio graph, ambient sound playback, distortion chain, game audio lifecycle.
 - `src/input.js`: Keyboard, mouse, and touch input. Input init is idempotent; do not add duplicate listeners on restart.
 - `src/hud.js`: HUD scene and prompt rendering.
@@ -43,8 +44,11 @@ The app is a small ES module game, not a framework app. `index.html` loads `src/
 - The maze is generated in chunks.
 - Chunks near the player are always loaded.
 - Additional chunks can preload if they are in range and potentially visible.
+- Chunk refresh is gated: `runtime.js` re-evaluates streaming only when the player enters a new chunk or the camera rotates past a threshold. Restart forces one fresh refresh.
+- Wall meshes are merged per chunk and light panels use an `InstancedMesh`, so rendered objects are not collision objects. Collision and line of sight use plain per-wall records (`userData.worldBox`/`worldCenter`) indexed in a wall spatial index; query it instead of scanning all walls.
 - Each chunk owns its walls, light panels, phone positions, phone raycast targets, and debug helpers.
 - Static world bounds are cached once when a chunk is created. Hot paths should reuse that cached data instead of rebuilding `Box3` or `Vector3` objects every frame.
+- Chunks own GPU resources (merged wall geometry, instance buffers, border planes, debug helpers). `disposeChunkResources()` releases them on unload and reset, driven by `userData.ownsGeometry`/`ownsMaterial` tags. If you add a per-chunk geometry or material, tag it; never tag shared geometry or cloned GLTF resources.
 
 ### Main loop
 
@@ -58,12 +62,18 @@ The frame loop is intentionally split into smaller phases:
 
 Keep new per-frame logic in those smaller helpers. Avoid growing `animate()` back into a large monolith.
 
+### Quality and profiling
+
+- Quality presets (desktop, mobile, low) control render scale, bloom, postprocessing, preload/render distance, and audio proximity rate. Force one with `?quality=desktop|mobile|low`; reduced-motion and save-data preferences fall back to `low`.
+- `?profile` (or debug mode) shows rolling timings for chunk updates, entity work, audio effects, and audio proximity next to the FPS counter.
+
 ### Audio lifecycle
 
 - `initAudioContext()` creates the shared audio context and master distortion chain once.
 - `startGameAudio()` restarts looping sources for a new run.
 - `resetAudioForStartScreen()` stops active sources and resets the audio graph state.
-- Ambient footsteps and door sounds are scheduled from `main.js`. Do not add recursive timers inside the playback helpers.
+- Ambient footsteps and door sounds are scheduled from `runtime.js`. Do not add recursive timers inside the playback helpers.
+- Light hum and phone ring proximity are throttled to a quality-dependent interval. The phone proximity scan must return the true nearest phone distance; it gates the interact prompt.
 
 ### Input lifecycle
 
@@ -114,6 +124,8 @@ Static assets live under `public/`:
 - `public/models/`
 - `public/sounds/`
 
+Everything in `public/` ships verbatim in `dist/`, so do not park unused files there. Textures are WebP.
+
 ## Current caveat
 
-`npm run build` succeeds, but Vite still reports a large main bundle warning. If you work on loading or architecture, code-splitting is a valid next step.
+`npm run build` succeeds. The app is code-split: the menu entry is small and the runtime loads on demand. Vite still warns about the Three.js vendor chunk (~520 kB minified); that is expected and only worth revisiting if Three.js gains better tree-shaking.
