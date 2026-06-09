@@ -47,6 +47,20 @@ Branch renamed to `dirien/optimize-game`.
     Use `?profile` or debug mode to show rolling timings for chunk updates,
     entity work, audio effects, and audio proximity beside the FPS counter.
 
+11. Chunk GPU resources are released on removal.
+    Merged wall geometry, light-panel instance buffers, border planes, and
+    debug helpers are disposed when a chunk unloads or the world resets.
+    Shared geometry/materials and cloned GLTF models are left untouched.
+
+12. Phone proximity returns the true nearest distance.
+    The early exit in the phone ring loop was removed because the returned
+    distance gates the interact prompt; the list is small, so the scan is
+    cheap.
+
+13. The unused `public/graphics/carpet.png` (886 KB) was deleted.
+    The floor uses a procedural carpet shader, and `public/` assets ship in
+    `dist/` verbatim.
+
 ## Verification
 
 - `markdownlint` passes.

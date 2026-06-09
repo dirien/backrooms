@@ -160,7 +160,10 @@ function createNormalLine(origin, direction, material) {
         origin.clone().add(direction.clone().multiplyScalar(1.5)),
     ];
     const geometry = new THREE.BufferGeometry().setFromPoints(points);
-    return new THREE.Line(geometry, material);
+    const line = new THREE.Line(geometry, material);
+    line.userData.ownsGeometry = true;
+    line.userData.ownsMaterial = true;
+    return line;
 }
 
 export function createChunkBorder(cx, cz, debugMode) {
@@ -196,6 +199,11 @@ export function createChunkBorder(cx, cz, debugMode) {
     west.position.set(-halfSize, height / 2, 0);
     west.rotation.y = Math.PI / 2;
     group.add(west);
+
+    for (const mesh of group.children) {
+        mesh.userData.ownsGeometry = true;
+        mesh.userData.ownsMaterial = true;
+    }
 
     group.position.set(cx * CHUNK_SIZE, 0, cz * CHUNK_SIZE);
     group.visible = debugMode;
@@ -253,6 +261,7 @@ function addMergedWallsToChunk(group, wallMaterial, wallGeometry, positions) {
     geometries.forEach((geometry) => geometry.dispose());
 
     const wallMesh = new THREE.Mesh(mergedGeometry, wallMaterial);
+    wallMesh.userData.ownsGeometry = true;
     addStaticMesh(group, wallMesh, [], { castShadow: true, receiveShadow: true });
 }
 
@@ -411,11 +420,15 @@ function applyOutletRotation(object, normal) {
 function addDebugHelpers(object, group, debugNormals, debugMode, color, size) {
     const boxHelper = new THREE.BoxHelper(object, color);
     boxHelper.visible = debugMode;
+    boxHelper.userData.ownsGeometry = true;
+    boxHelper.userData.ownsMaterial = true;
     group.add(boxHelper);
     debugNormals.push(boxHelper);
 
     const axes = new THREE.AxesHelper(size);
     axes.visible = debugMode;
+    axes.userData.ownsGeometry = true;
+    axes.userData.ownsMaterial = true;
     object.add(axes);
     debugNormals.push(axes);
 }
@@ -599,9 +612,36 @@ function removeTrackedItems(list, items) {
     }
 }
 
+function disposeOwnedChildResources(child) {
+    if (child.isInstancedMesh) {
+        child.dispose();
+    }
+
+    if (child.userData.ownsGeometry) {
+        child.geometry.dispose();
+    }
+
+    if (child.userData.ownsMaterial) {
+        child.material.dispose();
+    }
+}
+
+// Chunks own their merged wall geometry, light-panel instance buffers, border
+// planes, and debug helpers. Phone/outlet clones share GLTF resources and the
+// floor/ceiling/panel geometry is cached globally, so only tagged children and
+// instanced meshes are disposed here.
+export function disposeChunkResources(chunk) {
+    chunk.traverse(disposeOwnedChildResources);
+
+    if (chunk.userData.border) {
+        chunk.userData.border.traverse(disposeOwnedChildResources);
+    }
+}
+
 function removeChunk(scene, key, chunk, chunks, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes) {
     scene.remove(chunk);
     chunks.delete(key);
+    disposeChunkResources(chunk);
 
     removeTrackedItems(walls, chunk.userData.walls || []);
     removeTrackedItems(lightPanels, chunk.userData.lightPanels || []);

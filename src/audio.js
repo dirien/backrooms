@@ -291,10 +291,11 @@ export function updatePhoneRingVolume(camera, phonePositions) {
     const playerPos = camera.position;
     const maxDistSq = PHONE_AUDIO_MAX_DIST * PHONE_AUDIO_MAX_DIST;
 
+    // No early exit here: the returned distance gates the interact prompt at
+    // PHONE_INTERACT_DIST, so it must be the true nearest phone distance.
     for (const phonePos of phonePositions) {
         const distSq = playerPos.distanceToSquared(phonePos);
         if (distSq < minDistSq) minDistSq = distSq;
-        if (minDistSq <= PHONE_AUDIO_CLOSE_DIST * PHONE_AUDIO_CLOSE_DIST) break;
     }
 
     const minDist = minDistSq > maxDistSq ? PHONE_AUDIO_MAX_DIST : Math.sqrt(minDistSq);

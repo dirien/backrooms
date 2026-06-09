@@ -38,6 +38,7 @@ import {
 } from './hud.js';
 import {
     createWallSpatialIndex,
+    disposeChunkResources,
     queryWallsNearBox,
     rebuildWallSpatialIndex,
     updateChunks,
@@ -590,6 +591,7 @@ function clearWorldState() {
             scene.remove(chunk.userData.border);
         }
         chunks.delete(key);
+        disposeChunkResources(chunk);
     }
 
     walls = [];
