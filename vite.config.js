@@ -6,6 +6,19 @@ export default defineConfig({
     allowedHosts: true
   },
   build: {
-    target: 'esnext'
+    target: 'esnext',
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          three: ['three'],
+          'three-postprocessing': [
+            'three/addons/postprocessing/EffectComposer.js',
+            'three/addons/postprocessing/RenderPass.js',
+            'three/addons/postprocessing/ShaderPass.js',
+            'three/addons/postprocessing/UnrealBloomPass.js'
+          ]
+        }
+      }
+    }
   }
 });

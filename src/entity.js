@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { ENTITY_DISAPPEAR_DISTANCE, DEBUG_SANITY_LEVELS } from './constants.js';
 import { randomBetween, randomFloat } from './random.js';
 import { ENTITY_DISTORTION_SHADER } from './shaders/entity.js';
-import { hasLineOfSight } from './world.js';
+import { hasLineOfSight, queryWallsNearBox } from './world.js';
 
 /**
  * Bacteria entity system for horror appearances
@@ -18,6 +18,9 @@ let demoBacteriaEntity = null;
 const hiddenEntityPosition = new THREE.Vector3();
 const entityBounds = new THREE.Box3();
 const entityWorldPosition = new THREE.Vector3();
+const entityQueryBounds = new THREE.Box3();
+const entityQuerySize = new THREE.Vector3();
+const nearbyEntityWalls = [];
 const spawnDirection = new THREE.Vector3();
 const upAxis = new THREE.Vector3(0, 1, 0);
 
@@ -41,17 +44,26 @@ export function resetBacteriaState() {
 }
 
 // Check if entity bounding box at given position would collide with any walls
-function entityCollidesWithWalls(x, z, entityHalfWidth, walls) {
+function entityCollidesWithWalls(x, z, entityHalfWidth, walls, wallSpatialIndex) {
     const padding = 0.3;
     const halfSize = entityHalfWidth + padding;
+    const entityMinX = x - halfSize;
+    const entityMaxX = x + halfSize;
+    const entityMinZ = z - halfSize;
+    const entityMaxZ = z + halfSize;
+    const wallsToCheck = wallSpatialIndex
+        ? queryWallsNearBox(
+            wallSpatialIndex,
+            entityQueryBounds.setFromCenterAndSize(
+                entityWorldPosition.set(x, 1.5, z),
+                entityQuerySize.set(halfSize * 2, 3, halfSize * 2),
+            ),
+            nearbyEntityWalls,
+        )
+        : walls;
 
-    for (const wall of walls) {
+    for (const wall of wallsToCheck) {
         const wallBounds = wall.userData.worldBox ?? entityBounds.setFromObject(wall);
-
-        const entityMinX = x - halfSize;
-        const entityMaxX = x + halfSize;
-        const entityMinZ = z - halfSize;
-        const entityMaxZ = z + halfSize;
 
         if (entityMaxX > wallBounds.min.x && entityMinX < wallBounds.max.x &&
             entityMaxZ > wallBounds.min.z && entityMinZ < wallBounds.max.z) {
@@ -63,7 +75,7 @@ function entityCollidesWithWalls(x, z, entityHalfWidth, walls) {
 }
 
 // Spawn the bacteria entity at a position the player can see
-function spawnBacteriaEntity(minDist, maxDist, bacteriaModel, camera, scene, walls) {
+function spawnBacteriaEntity(minDist, maxDist, bacteriaModel, camera, scene, walls, wallSpatialIndex) {
     if (!bacteriaModel || !camera || !scene) return false;
 
     if (!bacteriaEntity) {
@@ -117,11 +129,11 @@ function spawnBacteriaEntity(minDist, maxDist, bacteriaModel, camera, scene, wal
         const spawnX = playerX + spawnDirection.x * distance;
         const spawnZ = playerZ + spawnDirection.z * distance;
 
-        if (!hasLineOfSight(playerX, playerZ, spawnX, spawnZ, walls)) {
+        if (!hasLineOfSight(playerX, playerZ, spawnX, spawnZ, walls, wallSpatialIndex)) {
             continue;
         }
 
-        if (entityCollidesWithWalls(spawnX, spawnZ, entityHalfWidth, walls)) {
+        if (entityCollidesWithWalls(spawnX, spawnZ, entityHalfWidth, walls, wallSpatialIndex)) {
             continue;
         }
 
@@ -161,7 +173,7 @@ function hideBacteriaEntity(materials) {
     updateEnvironmentDarkness(hiddenEntityPosition, false, 0, 0, materials);
 }
 
-function updateBacteriaDistortion(progress, sanityFactor, camera, walls, materials) {
+function updateBacteriaDistortion(progress, sanityFactor, camera, walls, materials, wallSpatialIndex) {
     if (!bacteriaEntity || !bacteriaVisible || !camera) return;
 
     const playerX = camera.position.x;
@@ -175,7 +187,7 @@ function updateBacteriaDistortion(progress, sanityFactor, camera, walls, materia
         return;
     }
 
-    if (!hasLineOfSight(playerX, playerZ, bacteriaEntity.position.x, bacteriaEntity.position.z, walls)) {
+    if (!hasLineOfSight(playerX, playerZ, bacteriaEntity.position.x, bacteriaEntity.position.z, walls, wallSpatialIndex)) {
         hideBacteriaEntity(materials);
         return;
     }
@@ -208,7 +220,7 @@ function updateBacteriaDistortion(progress, sanityFactor, camera, walls, materia
     bacteriaEntity.position.y = baseY + Math.sin(time * 4) * bobAmount;
 }
 
-export function updateBacteriaEntity(bacteriaModel, camera, scene, walls, materials, isStarted, playerSanity, debugSanityOverride) {
+export function updateBacteriaEntity(bacteriaModel, camera, scene, walls, wallSpatialIndex, materials, isStarted, playerSanity, debugSanityOverride) {
     if (!bacteriaModel || !camera || !isStarted) return;
 
     const currentTime = performance.now();
@@ -239,13 +251,13 @@ export function updateBacteriaEntity(bacteriaModel, camera, scene, walls, materi
             bacteriaNextSpawnDelay = randomBetween(minDelay, maxDelay);
             bacteriaLastSpawnTime = currentTime;
         } else {
-            updateBacteriaDistortion(visibleTime / bacteriaVisibleDuration, sanityFactor, camera, walls, materials);
+            updateBacteriaDistortion(visibleTime / bacteriaVisibleDuration, sanityFactor, camera, walls, materials, wallSpatialIndex);
         }
     } else {
         if (currentTime - bacteriaLastSpawnTime >= bacteriaNextSpawnDelay) {
             const spawnChance = 0.6 + sanityFactor * 0.35;
             if (randomFloat() < spawnChance) {
-                spawnBacteriaEntity(minDist, maxDist, bacteriaModel, camera, scene, walls);
+                spawnBacteriaEntity(minDist, maxDist, bacteriaModel, camera, scene, walls, wallSpatialIndex);
                 bacteriaVisibleDuration = randomBetween(minDuration, maxDuration);
                 bacteriaSpawnStartTime = currentTime;
             } else {

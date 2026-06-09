@@ -44,16 +44,20 @@ The objective is simple: reach a phone before sanity reaches zero.
 - Mobile touch controls
 - Low-sanity bacteria encounters
 - Shader-based wake-up and fade transitions
+- Quality presets (`?quality=desktop|mobile|low`) and a profiling overlay (`?profile`)
 
 ## Project structure
 
-- `src/main.js`: game runtime and frame loop
-- `src/world.js`: chunk generation, cached world data, line of sight
+- `src/main.js`: menu entry; lazy-loads the runtime when a level starts
+- `src/runtime.js`: game runtime and frame loop
+- `src/world.js`: chunk generation, cached world data, wall spatial index, line of sight
 - `src/audio.js`: sound playback and distortion pipeline
 - `src/input.js`: desktop and mobile input
 - `src/hud.js`: sanity bar and interaction prompts
 - `src/entity.js`: bacteria logic
 - `src/models.js`: materials, geometry, and GLTF loading
+- `src/menu.js`: level-selection menu
+- `src/levels.js`: level definitions
 - `src/random.js`: shared runtime randomness
 - `src/shaders/`: shader definitions
 
@@ -82,4 +86,4 @@ and keep it clean.
 npm run build
 ```
 
-The build currently succeeds, but Vite still warns that the main bundle is large. That is the main remaining packaging issue.
+The build is code-split: the menu loads first and the game runtime (including Three.js) loads when a level starts. Vite still warns about the size of the Three.js vendor chunk; that is expected.
