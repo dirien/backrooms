@@ -30,7 +30,9 @@ sbx ports codex-backrooms --publish 5173:5173
 | Answer a nearby phone | E | Answer or tap the phone |
 | Pause | Escape | Pause button |
 
-Connect three **different** phones. Each connection restores 25 sanity and reveals another transmission. Phones are sparse: one per 6 × 6 chunk sector, with at least 120 metres between phone-chunk centres. Your receiver shows the relative direction and strength of an unused line within its 48-metre range; stereo ringing helps you find it. Sanity loss is tuned for the longer search. Phones cannot be answered through walls.
+Connect three **different** phones. The first two connections restore 8 sanity and reveal another transmission; the final call brings rescue without increasing the finishing sanity. Phone locations and wall attachments change each expedition and stay fixed when rooms reload during that run. Phones remain sparse: one per 6 × 6 chunk sector, with at least 120 metres between phone-chunk centres. Your receiver shows the relative direction and strength of an unused line within its 48-metre range; stereo ringing helps you find it. Phones cannot be answered through walls.
+
+Sanity drains at 0.30 points per second above 50%, then slows to 0.14 points per second. Without calls, the unsettling half of the meter arrives after about 2 minutes 47 seconds; two early calls extend that to about 3 minutes 40 seconds. This gives players time to experience the lower-sanity effects and search for the final line. Very fast runs can still escape before encounters begin.
 
 Sprinting consumes stamina. After exhaustion, recover at least 30% before sprinting again. The torch recharges while switched off and automatically switches off when empty. Entity encounters become eligible only at 50% displayed sanity or below, after an eight-second grace period. Lower sanity makes sightings more frequent and approaches faster; phone progress and elapsed time do not trigger them. Recovering above 50% ends the encounter.
 

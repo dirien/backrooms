@@ -1,6 +1,6 @@
 import { createTorch, TORCH_INTENSITY } from './lighting.js';
 import { settings, bindSessionUI, showFieldHUD, showSessionOverlay, hideSessionOverlay, showTransmission, updateFieldHUD } from './session-ui.js';
-import { createExpedition, connectPhone, phoneId, advanceVitals, REQUIRED_CALLS, TRANSMISSIONS } from './expedition.js';
+import { createExpedition, connectPhone, phoneId, advanceVitals, advanceSanity, recoverPhoneSanity, REQUIRED_CALLS, TRANSMISSIONS } from './expedition.js';
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
@@ -303,7 +303,7 @@ function interactWithPhone() {
     if (!connectPhone(session, nearestPhone)) return;
     playPhonePickup();
     showTransmission(TRANSMISSIONS[session.calls.size - 1], 9);
-    playerSanity = Math.min(100, playerSanity + 25);
+    playerSanity = recoverPhoneSanity(playerSanity, session.calls.size);
     callCooldown = session.elapsed + 3;
     if (session.calls.size === REQUIRED_CALLS) {
         isInteractingWithPhone = true;
@@ -868,8 +868,7 @@ function drainPlayerSanity(delta) {
         return;
     }
 
-    playerSanity -= delta * getSanityDrainRate(playerSanity);
-    playerSanity = Math.max(0, playerSanity);
+    playerSanity = advanceSanity(playerSanity, delta);
 
     if (playerSanity <= 0 && !isSanityGameOver && !isInteractingWithPhone) {
         isSanityGameOver = true;
@@ -880,26 +879,6 @@ function drainPlayerSanity(delta) {
             fadeStartTime = performance.now();
         }
     }
-}
-
-function getSanityDrainRate(sanity) {
-    if (sanity <= 10) {
-        return 0.36;
-    }
-
-    if (sanity <= 30) {
-        return 0.24;
-    }
-
-    if (sanity <= 50) {
-        return 0.18;
-    }
-
-    if (sanity <= 80) {
-        return 0.15;
-    }
-
-    return 0.12;
 }
 
 function updateRuntimeSystems() {
@@ -953,7 +932,7 @@ function refreshChunks(force) {
         lightPanels,
         phonePositions,
         phoneMeshes,
-        qualitySettings,
+        { ...qualitySettings, phoneSeed: session.phoneSeed },
     );
 
     if (result.changed) {

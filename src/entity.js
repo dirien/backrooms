@@ -3,8 +3,9 @@ import { ENTITY_DISAPPEAR_DISTANCE, DEBUG_SANITY_LEVELS } from './constants.js';
 import { randomBetween } from './random.js';
 import { hasLineOfSight, queryWallsNearBox } from './world.js';
 import { createEntityModel, animateEntityModel } from './entity-model.js';
+import { SANITY_EFFECT_THRESHOLD } from './expedition.js';
 
-export const ENTITY_SANITY_THRESHOLD = 50;
+export const ENTITY_SANITY_THRESHOLD = SANITY_EFFECT_THRESHOLD;
 const FIRST_ENCOUNTER_DELAY = 8000;
 let bacteriaEntity = null;
 let bacteriaVisible = false;

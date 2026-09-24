@@ -3,19 +3,20 @@ import { getPhoneChunkForSector, isPhoneChunk } from '../src/world-layout.js';
 import * as THREE from 'three';
 import { sampleFixtureIrradiance } from '../src/lighting.js';
 import { generateWallGrid, createChunkLightingContext } from '../src/world.js';
-import { createExpedition, connectPhone, advanceVitals, REQUIRED_CALLS } from '../src/expedition.js';
+import { createExpedition, connectPhone, advanceVitals, advanceSanity, recoverPhoneSanity, REQUIRED_CALLS } from '../src/expedition.js';
 
 // Expose test controls only in intercepted source; the shipped game has no test API.
 const testExports = `
 import { getPhoneChunkForSector } from '/src/world-layout.js';
 import { bakeFixtureLighting } from '/src/lighting.js';
+let nextTestPhoneSeed = 1234;
 globalThis.expeditionTest = {
-    state: () => ({ started: isStarted, paused, sanity: playerSanity, calls: session.calls.size, distance: session.distance, stamina: session.stamina, battery: session.battery, elapsed: session.elapsed, phones: phonePositions.length, chunks: chunks.size, pitch: camera.rotation.x, yaw: camera.rotation.y, height: camera.position.y, gameOver: isSanityGameOver }),
+    state: () => ({ started: isStarted, paused, sanity: playerSanity, calls: session.calls.size, phoneSeed: session.phoneSeed, distance: session.distance, stamina: session.stamina, battery: session.battery, elapsed: session.elapsed, phones: phonePositions.length, chunks: chunks.size, pitch: camera.rotation.x, yaw: camera.rotation.y, height: camera.position.y, gameOver: isSanityGameOver }),
     phone: (blocked = false) => {
         findNearestPhone();
         if (!nearestPhone) {
             for (let sector = -2; sector <= 2; sector++) {
-                const chunk = getPhoneChunkForSector(sector, 0);
+                const chunk = getPhoneChunkForSector(sector, 0, session.phoneSeed);
                 camera.position.set(chunk.x * CHUNK_SIZE, 1.7, chunk.z * CHUNK_SIZE);
                 refreshChunks(true);
                 findNearestPhone();
@@ -38,6 +39,14 @@ globalThis.expeditionTest = {
             }
         }
         return false;
+    },
+    sanity: (value) => { playerSanity = value; },
+    phoneSnapshot: (reload = false) => {
+        const chunk = getPhoneChunkForSector(0, 0, session.phoneSeed);
+        camera.position.set(chunk.x * CHUNK_SIZE, 1.7, chunk.z * CHUNK_SIZE);
+        if (reload) clearWorldState();
+        refreshChunks(true);
+        return chunks.get(chunk.x + ',' + chunk.z).userData.phonePositions.map(position => position.toArray());
     },
     lose: () => { playerSanity = 0.001; },
     lighting: (powered, torchOn) => {
@@ -68,7 +77,9 @@ globalThis.expeditionTest = {
 async function instrument(page) {
     await page.route('**/src/runtime.js*', async (route) => {
         const response = await route.fetch();
-        await route.fulfill({ response, body: (await response.text()) + testExports });
+        const source = await response.text();
+        const body = source.replace('    session = createExpedition();', '    session = createExpedition(++nextTestPhoneSeed);') + testExports;
+        await route.fulfill({ response, body });
     });
 }
 const state = (page) => page.evaluate(() => globalThis.expeditionTest.state());
@@ -131,6 +142,7 @@ test('desktop exploration, pause, blocked calls, escape, restart and loss', asyn
     expect(after.sanity).toBe(before.sanity);
     await page.locator('#resume-game').click();
     await expect(page.locator('#session-overlay')).toBeHidden();
+    await page.evaluate(() => globalThis.expeditionTest.sanity(40));
     expect(await phone(page, true)).toBe(true);
     await page.keyboard.press('KeyE');
     expect(await value(page, 'calls')).toBe(0);
@@ -138,6 +150,9 @@ test('desktop exploration, pause, blocked calls, escape, restart and loss', asyn
         expect(await phone(page)).toBe(true);
         await page.keyboard.press('KeyE');
         await expect.poll(async () => await value(page, 'calls')).toBe(calls);
+        const expectedSanity = calls === 1 ? 48 : 56;
+        expect(await value(page, 'sanity')).toBeLessThanOrEqual(expectedSanity);
+        expect(await value(page, 'sanity')).toBeGreaterThan(expectedSanity - 3);
         if (calls === 1) {
             await page.keyboard.press('KeyE');
             expect(await value(page, 'calls')).toBe(1);
@@ -197,23 +212,46 @@ test('procedural rooms remain connected and every chunk boundary has a passage',
 });
 
 
-test('phone sectors are sparse, deterministic and separated by at least 120 metres', () => {
-    const locations = [];
-    let count = 0;
-    for (let x = -30; x < 30; x++) {
-        for (let z = -30; z < 30; z++) {
-            if (isPhoneChunk(x, z)) { count++; locations.push({ x, z }); }
+test('phone layouts change between seeds while retaining sparse, stable placement', () => {
+    const routes = new Set();
+    for (const seed of [0, 1, 1234, 1235, 32768, 2147483648, 4294967295]) {
+        const locations = [];
+        for (let x = -30; x < 30; x++) {
+            for (let z = -30; z < 30; z++) {
+                if (isPhoneChunk(x, z, seed)) locations.push({ x, z });
+            }
         }
-    }
-    expect(count).toBe(100); // 100 phones across 3,600 chunks, previously about 1,800.
-    for (const a of locations) {
-        const sector = getPhoneChunkForSector(Math.floor(a.x / 6), Math.floor(a.z / 6));
-        expect(sector).toEqual(a);
-        for (const b of locations) {
-            if (a === b) continue;
-            expect(Math.hypot(a.x - b.x, a.z - b.z) * 24).toBeGreaterThanOrEqual(120);
+        expect(locations).toHaveLength(100);
+        routes.add(JSON.stringify(locations));
+        let minimumSpacing = Infinity;
+        for (const a of locations) {
+            expect(getPhoneChunkForSector(Math.floor(a.x / 6), Math.floor(a.z / 6), seed)).toEqual(a);
+            for (const b of locations) {
+                if (a === b) continue;
+                minimumSpacing = Math.min(minimumSpacing, Math.hypot(a.x - b.x, a.z - b.z) * 24);
+            }
         }
+        expect(minimumSpacing).toBeGreaterThanOrEqual(120);
     }
+    expect(routes.size).toBe(7);
+});
+
+test('revisiting rooms preserves phone positions and replay changes the route', async ({ page }) => {
+    await instrument(page);
+    await page.goto('/?quality=low');
+    await launch(page);
+    const firstSeed = await value(page, 'phoneSeed');
+    const first = await page.evaluate(() => globalThis.expeditionTest.phoneSnapshot());
+    expect(first).toHaveLength(1);
+    const reloaded = await page.evaluate(() => globalThis.expeditionTest.phoneSnapshot(true));
+    expect(reloaded).toEqual(first);
+    await page.evaluate(() => document.exitPointerLock());
+    await page.locator('#leave-game').click();
+    await launch(page);
+    expect(await value(page, 'phoneSeed')).not.toBe(firstSeed);
+    const next = await page.evaluate(() => globalThis.expeditionTest.phoneSnapshot());
+    expect(next).toHaveLength(1);
+    expect(next).not.toEqual(first);
 });
 
 test('failed fixtures darken the rendered room and the torch visibly lights it', async ({ page }) => {
@@ -305,4 +343,41 @@ test('walls block fixture light, doorways pass it, and distant visible surfaces 
     expect(samples.doorway).toBeGreaterThan(samples.near * 0.6);
     expect(samples.poweredOff).toBe(true);
     expect(errors).toEqual([]);
+});
+
+test('sanity reaches encounter range sooner and leaves time to explore at low sanity', () => {
+    expect(advanceSanity(100, 166)).toBeGreaterThan(50);
+    expect(advanceSanity(100, 167)).toBeLessThan(50);
+    const withEarlyCalls = advanceSanity(recoverPhoneSanity(advanceSanity(recoverPhoneSanity(advanceSanity(100, 60), 1), 90), 2), 70);
+    expect(withEarlyCalls).toBeCloseTo(50, 6); // 3m40s, even after two early recoveries.
+    expect(advanceSanity(50, 120)).toBeGreaterThan(30);
+    expect(advanceSanity(10, 60)).toBeGreaterThan(0);
+    expect(advanceSanity(10, 100)).toBe(0);
+    expect(advanceSanity(40, 0)).toBe(40);
+    let sanity = 100;
+    for (let step = 0; step < 8000; step++) sanity = advanceSanity(sanity, 0.05);
+    expect(sanity).toBeCloseTo(advanceSanity(100, 400), 6);
+});
+
+test('four-to-six minute routes spend time below 50% and the final call does not heal', () => {
+    for (const calls of [[60, 150, 240], [90, 210, 330], [120, 240, 360]]) {
+        let sanity = 100;
+        let connected = 0;
+        let distressedSeconds = 0;
+        for (let seconds = 1; seconds <= calls.at(-1); seconds++) {
+            sanity = advanceSanity(sanity, 1);
+            if (sanity <= 50) distressedSeconds++;
+            if (calls.includes(seconds)) {
+                connected++;
+                const before = sanity;
+                sanity = recoverPhoneSanity(sanity, connected);
+                if (connected === REQUIRED_CALLS) expect(sanity).toBe(before);
+            }
+        }
+        expect(distressedSeconds).toBeGreaterThanOrEqual(20);
+        expect(sanity).toBeGreaterThan(20);
+        expect(sanity).toBeLessThan(50);
+    }
+    expect(recoverPhoneSanity(99, 1)).toBe(100);
+    expect(recoverPhoneSanity(40, 0)).toBe(40);
 });
