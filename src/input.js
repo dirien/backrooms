@@ -1,3 +1,4 @@
+import { settings } from './session-ui.js';
 /**
  * Input handling for keyboard, mouse, and touch controls
  */
@@ -7,6 +8,7 @@ let moveForward = false;
 let moveBackward = false;
 let moveLeft = false;
 let moveRight = false;
+let sprint = false;
 
 // Mobile touch controls
 let isMobile = false;
@@ -17,11 +19,12 @@ let lookTouchId = null;
 let lastLookPos = { x: 0, y: 0 };
 let keyboardControlsInitialized = false;
 let mouseControlsInitialized = false;
+let ignoreCaptureMotion = true;
 let touchControlsInitialized = false;
 let resumeAudioOnTouch = null;
 
 export function getMovementState() {
-    return { moveForward, moveBackward, moveLeft, moveRight };
+    return { moveForward, moveBackward, moveLeft, moveRight, sprint };
 }
 
 export function getJoystickInput() {
@@ -37,6 +40,9 @@ export function isMobileDevice() {
 }
 
 export function resetMovementState() {
+    sprint = false;
+    joystickTouchId = null;
+    lookTouchId = null;
     moveForward = false;
     moveBackward = false;
     moveLeft = false;
@@ -47,14 +53,13 @@ export function resetMovementState() {
 
 export function detectMobile() {
     isMobile = (
-        'ontouchstart' in window ||
-        navigator.maxTouchPoints > 0 ||
+        window.matchMedia('(pointer: coarse)').matches ||
         /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
     );
     return isMobile;
 }
 
-export function initKeyboardControls(onDebugToggle, onSanityCycle, onPhoneInteract) {
+export function initKeyboardControls(onDebugToggle, onSanityCycle, onPhoneInteract, onTorch) {
     if (keyboardControlsInitialized) {
         return;
     }
@@ -62,18 +67,22 @@ export function initKeyboardControls(onDebugToggle, onSanityCycle, onPhoneIntera
     keyboardControlsInitialized = true;
 
     document.addEventListener('keydown', (e) => {
-        if (e.code === 'KeyW') moveForward = true;
+        if (e.target.closest('input, select, button')) return;
+        if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') sprint = true;
+        if (e.code === 'KeyF' && !e.repeat) onTorch?.();
+        if (e.code === 'KeyW' || e.code === 'ArrowUp') moveForward = true;
         if (e.code === 'KeyA') moveLeft = true;
         if (e.code === 'KeyS') moveBackward = true;
         if (e.code === 'KeyD') moveRight = true;
         if (e.code === 'KeyO' && onDebugToggle) onDebugToggle();
         if (e.code === 'KeyN' && onSanityCycle) onSanityCycle(-1);
         if (e.code === 'KeyM' && onSanityCycle) onSanityCycle(1);
-        if (e.code === 'KeyE' && onPhoneInteract) onPhoneInteract();
+        if (e.code === 'KeyE' && !e.repeat && onPhoneInteract) onPhoneInteract();
     });
 
     document.addEventListener('keyup', (e) => {
-        if (e.code === 'KeyW') moveForward = false;
+        if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') sprint = false;
+        if (e.code === 'KeyW' || e.code === 'ArrowUp') moveForward = false;
         if (e.code === 'KeyA') moveLeft = false;
         if (e.code === 'KeyS') moveBackward = false;
         if (e.code === 'KeyD') moveRight = false;
@@ -87,18 +96,28 @@ export function initMouseControls(renderer, camera, onInteraction) {
 
     mouseControlsInitialized = true;
 
-    document.addEventListener('mousedown', () => {
+    globalThis.addEventListener('blur', resetMovementState);
+    document.addEventListener('pointerlockchange', () => {
+        resetMovementState();
+        ignoreCaptureMotion = true;
+    });
+    renderer.domElement.addEventListener('mousedown', () => {
         if (!isMobile) {
-            renderer.domElement.requestPointerLock();
+            renderer.domElement.requestPointerLock()?.catch((error) => console.warn('Mouse capture unavailable.', error));
         }
         if (onInteraction) onInteraction();
     });
 
     document.addEventListener('mousemove', (e) => {
         if (document.pointerLockElement === renderer.domElement) {
+            // Browsers can report cursor recentering as the first locked movement.
+            if (ignoreCaptureMotion) {
+                ignoreCaptureMotion = false;
+                return;
+            }
             camera.rotation.order = 'YXZ';
-            camera.rotation.y -= e.movementX * 0.002;
-            camera.rotation.x -= e.movementY * 0.002;
+            camera.rotation.y -= e.movementX * 0.002 * settings.sensitivity;
+            camera.rotation.x -= e.movementY * 0.002 * settings.sensitivity;
             camera.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, camera.rotation.x));
         }
     });

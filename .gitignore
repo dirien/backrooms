@@ -22,3 +22,11 @@ npm-debug.log*
 # Environment
 .env
 .env.local
+
+# Browser test artifacts
+test-results/
+playwright-report/
+
+# Vercel project link
+.vercel/
+.vercel

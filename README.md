@@ -1,89 +1,82 @@
-# Backrooms
+# Backrooms — Signal Lost
 
-A browser horror game built with Three.js.
+A browser horror game built with Three.js. Wake up in Level 0, follow the ringing, and connect three different telephone lines to establish a way out.
 
-You wake up in an endless maze of yellow rooms. Explore, manage your sanity, and find a telephone before the game fades out around you.
+## Play locally
 
-## Requirements
-
-- Node.js 22+
-- npm 11+
-
-## Setup
+Requires Node.js 22+ and npm.
 
 ```bash
 npm install
-npm run dev
+npm run dev -- --host 0.0.0.0
 ```
 
-## Scripts
+Open http://localhost:5173, select **The Lobby**, and enter. Click **Resume exploration** to capture your mouse. The browser must support WebGL 2.
+
+When running inside a Docker sandbox, publish the port from your host first:
 
 ```bash
-npm run dev
-npm run lint
-npm run lint:fix
-npm run build
-npm run preview
+sbx ports codex-backrooms --publish 5173:5173
 ```
 
-## Gameplay
+## Controls
 
-- Move with `W`, `A`, `S`, `D`
-- Look with the mouse
-- Answer a phone with `E`
-- On mobile, use the virtual joystick and tap the phone directly
+| Action | Desktop | Touch |
+| --- | --- | --- |
+| Move | WASD | Left joystick |
+| Look | Mouse | Drag the room |
+| Sprint | Hold Shift | Hold Sprint |
+| Flashlight | F | Torch |
+| Answer a nearby phone | E | Answer or tap the phone |
+| Pause | Escape | Pause button |
 
-The objective is simple: reach a phone before sanity reaches zero.
+Connect three **different** phones. Each connection restores 25 sanity and reveals another transmission. Phones are sparse: one per 6 × 6 chunk sector, with at least 120 metres between phone-chunk centres. Your receiver shows the relative direction and strength of an unused line within its 48-metre range; stereo ringing helps you find it. Sanity loss is tuned for the longer search. Phones cannot be answered through walls.
+
+Sprinting consumes stamina. After exhaustion, recover at least 30% before sprinting again. The torch recharges while switched off and automatically switches off when empty. Entity encounters become eligible only at 50% displayed sanity or below, after an eight-second grace period. Lower sanity makes sightings more frequent and approaches faster; phone progress and elapsed time do not trigger them. Recovering above 50% ends the encounter.
+
+**Wander** mode disables sanity loss and entity encounters. Settings include volume, mouse sensitivity, graphics quality, and camera effects; they persist locally. Reduced-motion preferences disable camera effects by default. Escape, window blur, or switching tabs pauses exploration.
+
+Only Level 0 is playable. Hotel and Pool routes remain sealed previews.
 
 ## Features
 
-- Infinite chunk-based Backrooms maze
-- Sanity system with escalating visual and audio effects
-- Procedural world generation with deterministic chunk layout
-- Web Audio ambient soundscape
-- Mobile touch controls
-- Low-sanity bacteria encounters
-- Shader-based wake-up and fade transitions
-- Quality presets (`?quality=desktop|mobile|low`) and a profiling overlay (`?profile`)
+- Deterministic infinite maze with connected rooms and guaranteed passages between chunks
+- Three-call escape sequence, subtitles, and separate escape/loss summaries
+- Stereo phone audio, movement footsteps, ambient disturbances, and sanity-driven entity sightings
+- A 2.2-metre entity with procedural idle and walking animation, plus wall clearance covering its animated limbs and turns
+- Rechargeable flashlight with wall shadows, sprint stamina, gentle camera bob and sprint field of view
+- Static fluorescent lighting baked into room and prop geometry, with wall occlusion and neighbouring-chunk fixtures included before streaming
+- Every visible surface keeps its fixture lighting at any distance; failed tubes and circuits stay dark, with only a faint ambient floor for visibility
+- Carpet detail, baseboards, environmental signage, varied fluorescent panels, fog, and film effects
+- Accessible DOM HUD, keyboard menus, touch controls, pause settings, and replay reset
+- Chunk streaming, spatial collision queries, reusable geometry, and graphics presets
 
-## Project structure
-
-- `src/main.js`: menu entry; lazy-loads the runtime when a level starts
-- `src/runtime.js`: game runtime and frame loop
-- `src/world.js`: chunk generation, cached world data, wall spatial index, line of sight
-- `src/audio.js`: sound playback and distortion pipeline
-- `src/input.js`: desktop and mobile input
-- `src/hud.js`: sanity bar and interaction prompts
-- `src/entity.js`: bacteria logic
-- `src/models.js`: materials, geometry, and GLTF loading
-- `src/menu.js`: level-selection menu
-- `src/levels.js`: level definitions
-- `src/random.js`: shared runtime randomness
-- `src/shaders/`: shader definitions
-
-## Linting and code quality
-
-The project uses a strict ESLint setup with:
-
-- `@eslint/js`
-- `eslint-plugin-import`
-- `eslint-plugin-sonarjs`
-- `eslint-plugin-unicorn`
-
-It also includes local checks for Three.js hot paths. Render and update functions should reuse temporary math objects instead of allocating `THREE.Vector2`, `THREE.Vector3`, `THREE.Box3`, or large typed arrays during gameplay.
-
-Run:
+## Development
 
 ```bash
 npm run lint
+npm run build
+npm run preview -- --host 0.0.0.0
 ```
 
-and keep it clean.
+`?quality=desktop|mobile|low` overrides the graphics setting. `?profile` enables timing diagnostics. The Three.js vendor chunk produces an expected size warning during builds.
 
-## Build
+## Tests
 
 ```bash
-npm run build
+npx playwright install --with-deps chromium
+npm test
 ```
 
-The build is code-split: the menu loads first and the game runtime (including Three.js) loads when a level starts. Vite still warns about the size of the Three.js vendor chunk; that is expected.
+Tests cover desktop movement, pausing, wall-blocked interactions, distinct calls, escape, loss, replay, mobile controls, Wander mode, stamina recovery, connectivity across 121 generated chunks, phone spacing across 3,600 chunks, rendered brightness with working lights, failed lights, and the torch; light blocked by walls and passed through doorways; lighting continuity across chunk borders; and visible lighting beyond the former 24-metre cutoff. Entity tests cover sanity gating, recovery, pause timing, failed-spawn cooldowns, animated dimensions, wall clearance, and the runtime sanity input. Browser tests use software WebGL at low quality; they do not benchmark hardware performance. Test-only controls are injected by Playwright and are absent from the shipped game.
+
+## Structure
+
+- `src/main.js`, `src/menu.js`, `src/levels.js`: menu and level selection
+- `src/runtime.js`: game lifecycle, movement, collisions, and frame loop
+- `src/expedition.js`: session progression and survival rules
+- `src/session-ui.js`, `src/session.css`, `src/hud.js`: settings, HUD, pause, and results
+- `src/world.js`, `src/world-layout.js`, `src/scenery.js`: connected maze generation, streaming, and environmental detail
+- `src/lighting.js`: static fixture baking with wall occlusion, plus the dynamic shadow-casting torch
+- `src/audio.js`, `src/entity.js`, `src/input.js`: sound, encounters, and controls
+- `src/models.js`, `src/shaders/`: assets, materials, and screen effects

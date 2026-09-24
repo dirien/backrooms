@@ -42,17 +42,17 @@ export const POST_SHADER = {
             float d = length(centeredUv);
 
             // === LEVEL 1: sanity <= 80% - Subtle wave distortion ===
-            float level1 = smoothstep(0.8, 0.7, sanity);
+            float level1 = (1.0 - smoothstep(0.7, 0.8, sanity));
             float wave1 = sin(uv.y * 15.0 + time * 2.0) * 0.003 * level1;
             uv.x += wave1;
 
             // === LEVEL 2: sanity <= 50% - Chromatic aberration + stronger waves ===
-            float level2 = smoothstep(0.5, 0.4, sanity);
+            float level2 = (1.0 - smoothstep(0.4, 0.5, sanity));
             float wave2 = sin(uv.x * 20.0 + time * 3.0) * cos(uv.y * 10.0 + time) * 0.006 * level2;
             uv += vec2(wave2, wave2 * 0.5);
 
             // === LEVEL 3: sanity <= 30% - Tunnel vision + pulsing + heavy distortion ===
-            float level3 = smoothstep(0.3, 0.2, sanity);
+            float level3 = (1.0 - smoothstep(0.2, 0.3, sanity));
             float pulse = sin(time * 4.0) * 0.5 + 0.5;
             float tunnel = d * d * 0.15 * level3 * (1.0 + pulse * 0.3);
             uv += centeredUv * tunnel;
@@ -63,7 +63,7 @@ export const POST_SHADER = {
             uv += vec2(cos(angle), sin(angle)) * spiral;
 
             // === LEVEL 4: sanity <= 10% - Complete insanity ===
-            float level4 = smoothstep(0.1, 0.0, sanity);
+            float level4 = (1.0 - smoothstep(0.0, 0.1, sanity));
 
             // Violent screen shake
             float shake = level4 * 0.02;
@@ -73,15 +73,6 @@ export const POST_SHADER = {
             // Reality fracturing
             float fracture = sin(time * 8.0 + uv.y * 30.0) * 0.015 * level4;
             uv.x += fracture;
-
-            // Kaleidoscope effect
-            if (level4 > 0.5) {
-                float kAngle = atan(centeredUv.y, centeredUv.x);
-                float kDist = length(centeredUv);
-                kAngle = mod(kAngle + time * 0.5, 3.14159 / 3.0) - 3.14159 / 6.0;
-                vec2 kUv = vec2(cos(kAngle), sin(kAngle)) * kDist + 0.5;
-                uv = mix(uv, kUv, level4 * 0.3);
-            }
 
             // Base barrel distortion
             uv += centeredUv * d * d * 0.04;
@@ -96,13 +87,13 @@ export const POST_SHADER = {
             // === Chromatic aberration (levels 2-4) ===
             float chromaStrength = level2 * 0.008 + level3 * 0.015 + level4 * 0.03;
             if (chromaStrength > 0.0) {
-                vec2 chromaDir = normalize(centeredUv) * chromaStrength;
+                vec2 chromaDir = centeredUv / max(length(centeredUv), 0.001) * chromaStrength;
                 col.r = texture2D(tDiffuse, uv + chromaDir).r;
                 col.b = texture2D(tDiffuse, uv - chromaDir).b;
             }
 
             // === Film grain ===
-            float grain = (random(uv + time) - 0.5) * (0.05 + sFac * 0.15);
+            float grain = (random(uv + time) - 0.5) * (0.012 + sFac * 0.05);
             col.rgb += grain;
 
             // === Color shifts ===
@@ -120,14 +111,8 @@ export const POST_SHADER = {
                 col.rgb = mix(col.rgb, col.rgb * tint, level3 * 0.2);
             }
 
-            // Level 4: Color inversion flashes
-            if (level4 > 0.0) {
-                float flash = step(0.95, random(vec2(floor(time * 8.0), 0.0)));
-                col.rgb = mix(col.rgb, 1.0 - col.rgb, flash * level4);
-            }
-
             // === Vignette ===
-            float vignetteBase = smoothstep(1.0, 0.35, d);
+            float vignetteBase = (1.0 - smoothstep(0.35, 1.0, d));
             float vignettePulse = level3 > 0.0 ? (sin(time * 3.0) * 0.1 + 0.9) : 1.0;
             float vignetteStrength = vignetteBase * vignettePulse;
             vignetteStrength = mix(vignetteStrength, vignetteStrength * 0.7, level4);

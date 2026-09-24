@@ -50,7 +50,7 @@ export function getBacteriaModel() {
 
 // Create wall geometry with proper UV mapping
 function createWallGeometry(width, height, depth) {
-    const geo = new THREE.BoxGeometry(width, height, depth);
+    const geo = new THREE.BoxGeometry(width, height, depth, Math.ceil(width * 2), Math.ceil(height * 2), Math.ceil(depth * 2));
     const uvAttribute = geo.attributes.uv;
     const posAttribute = geo.attributes.position;
     const normalAttribute = geo.attributes.normal;
@@ -136,6 +136,15 @@ function enhanceMaterialWithDarkness(material) {
             '#include <dithering_fragment>',
             `
             #include <dithering_fragment>
+            float edgeShade = smoothstep(0.0, 0.5, vWorldPosition.y);
+            if (vWorldPosition.y > 0.05 && vWorldPosition.y < 2.95) {
+                gl_FragColor.rgb *= 0.76 + edgeShade * 0.24;
+            }
+            if (vWorldPosition.y < 0.05) {
+                float fiber = fract(sin(dot(floor(vWorldPosition.xz * 170.0), vec2(12.9898, 78.233))) * 43758.5453);
+                float stain = sin(vWorldPosition.x * 0.37) * sin(vWorldPosition.z * 0.23);
+                gl_FragColor.rgb *= 0.86 + fiber * 0.20 + stain * 0.09;
+            }
             if (entityVisible > 0.5) {
                 float dist = distance(vWorldPosition, entityWorldPos);
                 float darknessFactor = smoothstep(0.0, darknessRadius, dist);
@@ -156,6 +165,7 @@ export function createGlobalResources(theme) {
         wallTexture = textureLoader.load('/graphics/wallpaper.webp');
         wallTexture.wrapS = wallTexture.wrapT = THREE.RepeatWrapping;
         wallTexture.repeat.set(1, 1);
+        wallTexture.colorSpace = THREE.SRGBColorSpace;
     }
 
     if (!ceilingTexture) {
@@ -175,7 +185,8 @@ export function createGlobalResources(theme) {
 
 function createSharedMaterials() {
     if (!wallMat) {
-        wallMat = new THREE.MeshLambertMaterial({
+        wallMat = new THREE.MeshStandardMaterial({
+            roughness: 0.95,
             map: wallTexture,
             side: THREE.FrontSide
         });
@@ -183,7 +194,8 @@ function createSharedMaterials() {
     }
 
     if (!floorMat) {
-        floorMat = new THREE.MeshLambertMaterial({
+        floorMat = new THREE.MeshStandardMaterial({
+            roughness: 1,
             side: THREE.FrontSide
         });
         enhanceMaterialWithDarkness(floorMat);
@@ -222,8 +234,8 @@ function createSharedGeometry() {
     wallGeoV = createWallGeometry(wallThickness, wallHeight, wallLengthV);
     wallGeoH = createWallGeometry(wallLengthH, wallHeight, wallThickness);
 
-    floorGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE);
-    ceilingGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE);
+    floorGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE * 2, CHUNK_SIZE * 2);
+    ceilingGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE * 2, CHUNK_SIZE * 2);
 }
 
 function applyTheme(theme) {

@@ -24,7 +24,21 @@ export function createLevelMenu(levels, onLaunch) {
     updateControlsHint();
     showSelection();
     backButton.addEventListener('click', showSelection);
-    launchButton.addEventListener('click', () => onLaunch(levelMap.get(currentLevelId)));
+    launchButton.addEventListener('click', async () => {
+        if (launchButton.disabled) return;
+        launchButton.disabled = true;
+        launchButton.textContent = 'Establishing connection…';
+        try {
+            await onLaunch(levelMap.get(currentLevelId));
+        } catch (error) {
+            console.error('Could not start expedition.', error);
+            startScreen.style.display = 'grid';
+            detailSummary.textContent = 'The connection failed. Check that WebGL is enabled, then try again.';
+        } finally {
+            launchButton.disabled = false;
+            launchButton.textContent = levelMap.get(currentLevelId).callToAction;
+        }
+    });
     startScreen.addEventListener('click', handleTileSelection);
 
     return {

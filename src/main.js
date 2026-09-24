@@ -1,3 +1,4 @@
+import './session-ui.js';
 import { BACKROOM_LEVELS } from './levels.js';
 import { createLevelMenu } from './menu.js';
 

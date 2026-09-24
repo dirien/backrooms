@@ -1,17 +1,23 @@
+import { createTorch, TORCH_INTENSITY } from './lighting.js';
+import { settings, bindSessionUI, showFieldHUD, showSessionOverlay, hideSessionOverlay, showTransmission, updateFieldHUD } from './session-ui.js';
+import { createExpedition, connectPhone, phoneId, advanceVitals, REQUIRED_CALLS, TRANSMISSIONS } from './expedition.js';
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
 // Import modules
-import { CHUNK_SIZE, PLAYER_RADIUS, WAKEUP_DURATION, FADE_DURATION, GAME_OVER_DELAY, DEBUG_SANITY_LEVELS, PHONE_INTERACT_DIST } from './constants.js';
+import { CHUNK_SIZE, PLAYER_RADIUS, WAKEUP_DURATION, FADE_DURATION, GAME_OVER_DELAY, DEBUG_SANITY_LEVELS, PHONE_INTERACT_DIST, PHONE_AUDIO_MAX_DIST } from './constants.js';
 import { POST_SHADER, FADE_SHADER, WAKEUP_SHADER } from './shaders/index.js';
 import {
     initAudioContext,
     resumeAudioContext,
     loadAmbientSounds,
-    loadPhonePickupSound,
+    setAudioVolume,
+    suspendAudio,
+    playPlayerStep,
     loadKidsLaughSound,
     updateHumVolume,
     updatePhoneRingVolume,
@@ -37,6 +43,7 @@ import {
     setMobileHUD
 } from './hud.js';
 import {
+    hasLineOfSight,
     createWallSpatialIndex,
     disposeChunkResources,
     queryWallsNearBox,
@@ -97,7 +104,17 @@ let isSanityGameOver = false;
 let currentLevel = getLevelById(DEFAULT_LEVEL_ID);
 let menuController = null;
 let ambientLight = null;
-let playerLight = null;
+let flashlight = null;
+let session = createExpedition();
+let paused = true;
+let mobileSprint = false;
+let nearestPhone = null;
+let hudTimer = 0;
+let footstepDistance = 0;
+let callCooldown = 0;
+let wakeupTimer = null;
+const activePhones = [];
+const phoneDirection = new THREE.Vector3();
 
 // Raycaster for mobile phone tap interaction
 const raycaster = new THREE.Raycaster();
@@ -169,7 +186,7 @@ function createChunkTracker() {
 }
 
 function getQualitySettings(isMobile) {
-    const requestedQuality = new URLSearchParams(window.location.search).get('quality');
+    const requestedQuality = new URLSearchParams(window.location.search).get('quality') || settings.quality;
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const connection = navigator.connection ?? navigator.mozConnection ?? navigator.webkitConnection;
     const saveData = connection?.saveData === true;
@@ -194,8 +211,8 @@ function angleDelta(current, previous) {
 }
 
 function shouldRefreshChunks() {
-    const playerChunkX = Math.floor(camera.position.x / CHUNK_SIZE);
-    const playerChunkZ = Math.floor(camera.position.z / CHUNK_SIZE);
+    const playerChunkX = Math.floor((camera.position.x + CHUNK_SIZE / 2) / CHUNK_SIZE);
+    const playerChunkZ = Math.floor((camera.position.z + CHUNK_SIZE / 2) / CHUNK_SIZE);
 
     return playerChunkX !== chunkTracker.chunkX ||
         playerChunkZ !== chunkTracker.chunkZ ||
@@ -204,8 +221,8 @@ function shouldRefreshChunks() {
 }
 
 function markChunksRefreshed() {
-    chunkTracker.chunkX = Math.floor(camera.position.x / CHUNK_SIZE);
-    chunkTracker.chunkZ = Math.floor(camera.position.z / CHUNK_SIZE);
+    chunkTracker.chunkX = Math.floor((camera.position.x + CHUNK_SIZE / 2) / CHUNK_SIZE);
+    chunkTracker.chunkZ = Math.floor((camera.position.z + CHUNK_SIZE / 2) / CHUNK_SIZE);
     chunkTracker.yaw = camera.rotation.y;
     chunkTracker.pitch = camera.rotation.x;
 }
@@ -247,6 +264,7 @@ function handleCollision(target) {
             } else {
                 target.z += (target.z > wallWorldPosition.z ? 1 : -1) * collisionOverlapSize.z;
             }
+            collisionPlayerBounds.setFromCenterAndSize(target, wallWorldPosition.set(PLAYER_RADIUS * 2, 1.8, PLAYER_RADIUS * 2));
         }
     }
 }
@@ -279,15 +297,40 @@ function cycleSanityLevel(direction) {
 }
 
 function interactWithPhone() {
-    if (isInteractingWithPhone || nearestPhoneDist > PHONE_INTERACT_DIST) return;
-
-    isInteractingWithPhone = true;
-    stopPhoneRing();
+    if (!isStarted || paused || isInteractingWithPhone || isSanityGameOver || session.elapsed < callCooldown) return;
+    findNearestPhone();
+    if (!nearestPhone || nearestPhoneDist > PHONE_INTERACT_DIST) return;
+    if (!connectPhone(session, nearestPhone)) return;
     playPhonePickup();
-
-    if (fadePass) {
+    showTransmission(TRANSMISSIONS[session.calls.size - 1], 9);
+    playerSanity = Math.min(100, playerSanity + 25);
+    callCooldown = session.elapsed + 3;
+    if (session.calls.size === REQUIRED_CALLS) {
+        isInteractingWithPhone = true;
+        stopPhoneRing();
+        fadeAllAudioToSilence(FADE_DURATION);
         fadePass.enabled = true;
-        fadeStartTime = performance.now();
+        fadeStartTime = performance.now() + 3500;
+    }
+    findNearestPhone();
+}
+
+function findNearestPhone() {
+    nearestPhone = null;
+    nearestPhoneDist = Infinity;
+    activePhones.length = 0;
+    for (const position of phonePositions) {
+        if (session.calls.has(phoneId(position))) continue;
+        activePhones.push(position);
+        const distance = camera.position.distanceTo(position);
+        if (distance < nearestPhoneDist) {
+            nearestPhone = position;
+            nearestPhoneDist = distance;
+        }
+    }
+    if (nearestPhone && nearestPhoneDist <= PHONE_INTERACT_DIST &&
+        !hasLineOfSight(camera.position.x, camera.position.z, nearestPhone.x, nearestPhone.z, walls, wallSpatialIndex)) {
+        nearestPhoneDist = Infinity;
     }
 }
 
@@ -318,10 +361,15 @@ function checkPhoneTap(clientX, clientY) {
 }
 
 function resetGameState() {
+    isStarted = false;
+    paused = true;
+    clearTimeout(wakeupTimer);
+    hideSessionOverlay();
+    showFieldHUD(false);
     fpsCounterElement.style.display = 'none';
     crosshairElement.style.display = 'none';
     touchControlsElement?.classList.remove('active');
-    startScreenElement.style.display = 'flex';
+    startScreenElement.style.display = 'grid';
     document.title = 'Backrooms';
     menuController?.showSelection();
 
@@ -363,48 +411,127 @@ function resetGameState() {
     clearWorldState();
     clearAmbientTimers();
 
-    resetBacteriaState();
+    resetBacteriaState(getMaterials());
 }
 
 let doorCloseTimeout = null;
 function scheduleAmbientDoorClose() {
     clearDoorCloseTimeout();
 
-    const nextDoor = playAmbientDoorClose(isStarted, playerSanity, debugSanityOverride);
-    if (nextDoor) {
-        doorCloseTimeout = setTimeout(scheduleAmbientDoorClose, nextDoor);
-    }
+    const nextDoor = playAmbientDoorClose(isStarted && !paused, playerSanity, debugSanityOverride);
+    if (isStarted) doorCloseTimeout = setTimeout(scheduleAmbientDoorClose, nextDoor || randomBetween(12000, 25000));
 }
 
 let footstepsTimeout = null;
 function scheduleAmbientFootsteps() {
     clearFootstepsTimeout();
 
-    playAmbientFootsteps(isStarted);
+    playAmbientFootsteps(isStarted && !paused);
     const nextFootsteps = randomBetween(8000, 25000);
     footstepsTimeout = setTimeout(scheduleAmbientFootsteps, nextFootsteps);
 }
 
 function animate() {
     requestAnimationFrame(animate);
-    const delta = clock.getDelta();
-
+    const delta = Math.min(clock.getDelta(), 0.05);
+    if (!isStarted) return;
     updateFpsCounter();
-
-    const isMobile = isMobileDevice();
-    const canMove = document.pointerLockElement === renderer.domElement || isMobile;
-
-    if (canMove) {
-        updatePlayerMovement(delta, isMobile);
-        drainPlayerSanity(delta);
+    if (!paused) {
+        if (!isInteractingWithPhone && !isSanityGameOver) {
+            updatePlayerMovement(delta, isMobileDevice());
+            drainPlayerSanity(delta);
+        }
         updateHUDSanity(playerSanity);
+        updateRuntimeSystems();
+        updateScreenEffects();
+        hudTimer += delta;
+        if (hudTimer > 0.1) {
+            hudTimer = 0;
+            updateFieldHUD(session, getPhoneSignalDistance(), getPhoneBearing());
+        }
     }
-
-    updateRuntimeSystems();
-    updateScreenEffects();
-
     composer.render();
-    renderHud();
+    if (!paused) renderHud();
+}
+
+function getPhoneSignalDistance() {
+    if (!nearestPhone) return Infinity;
+    const distance = camera.position.distanceTo(nearestPhone);
+    return distance <= PHONE_AUDIO_MAX_DIST ? distance : Infinity;
+}
+
+function getPhoneBearing() {
+    if (!nearestPhone) return '';
+    phoneDirection.subVectors(nearestPhone, camera.position);
+    const angle = Math.atan2(phoneDirection.x, -phoneDirection.z) + camera.rotation.y;
+    const relative = Math.atan2(Math.sin(angle), Math.cos(angle));
+    if (Math.abs(relative) < 0.5) return 'AHEAD';
+    if (Math.abs(relative) > 2.5) return 'BEHIND';
+    return relative > 0 ? 'RIGHT' : 'LEFT';
+}
+
+function pauseGame() {
+    if (!isStarted || paused || isInteractingWithPhone || isSanityGameOver) return;
+    paused = true;
+    resetMovementState();
+    mobileSprint = false;
+    velocity.set(0, 0, 0);
+    suspendAudio();
+    showSessionOverlay('pause', session);
+    showFieldHUD(false);
+    touchControlsElement?.classList.remove('active');
+    if (document.pointerLockElement) document.exitPointerLock();
+}
+
+function resumeGame() {
+    if (!isStarted) return;
+    resumeAudioContext();
+    if (!isMobileDevice()) {
+        const request = renderer.domElement.requestPointerLock();
+        request?.catch(() => showTransmission('Click the room to capture your mouse.'));
+        return;
+    }
+    activateControls();
+}
+
+function activateControls() {
+    if (!isStarted) return;
+    if (session.elapsed === 0) wakeupStartTime = performance.now();
+    paused = false;
+    document.activeElement?.blur();
+    hideSessionOverlay();
+    showFieldHUD(true, isMobileDevice());
+    if (isMobileDevice()) touchControlsElement?.classList.add('active');
+    resumeAudioContext();
+}
+
+function toggleTorch() {
+    if (isStarted && !paused && session.battery > 2) session.flashlight = !session.flashlight;
+}
+
+function applySettings() {
+    setAudioVolume(settings.volume);
+    qualitySettings = getQualitySettings(isMobileDevice());
+    applyRendererSize();
+    if (bloomPass) bloomPass.enabled = qualitySettings.bloom;
+    if (postPass) postPass.enabled = qualitySettings.postEffects && settings.motion;
+    resetChunkTracker();
+}
+
+function finishExpedition() {
+    const result = isSanityGameOver ? 'lost' : 'escaped';
+    isStarted = false;
+    paused = true;
+    clearTimeout(wakeupTimer);
+    clearAmbientTimers();
+    resetMovementState();
+    resetAudioForStartScreen();
+    hideHUD();
+    showFieldHUD(false);
+    touchControlsElement?.classList.remove('active');
+    crosshairElement.style.display = 'none';
+    if (document.pointerLockElement) document.exitPointerLock();
+    showSessionOverlay(result, session);
 }
 
 export async function initGame(level = currentLevel, controller = null) {
@@ -415,13 +542,21 @@ export async function initGame(level = currentLevel, controller = null) {
     menuController = controller ?? menuController;
     currentLevel = level;
     startScreenElement.style.display = 'none';
-    fpsCounterElement.style.display = 'block';
+    fpsCounterElement.style.display = profileEnabled ? 'block' : 'none';
     document.title = `Backrooms - ${currentLevel.detailTitle}`;
 
     isInteractingWithPhone = false;
+    isSanityGameOver = false;
+    paused = true;
+    session = createExpedition();
+    callCooldown = 0;
+    nearestPhoneDist = Infinity;
+    footstepDistance = 0;
     playerSanity = 100;
+    initAudioContext();
+    resumeAudioContext();
 
-    const isRestart = scene !== undefined && scene !== null;
+    const isRestart = Boolean(renderer && composer && fadePass);
 
     const isMobile = detectMobile();
     qualitySettings = getQualitySettings(isMobile);
@@ -429,15 +564,6 @@ export async function initGame(level = currentLevel, controller = null) {
     if (!isMobile) {
         crosshairElement.style.display = 'block';
     }
-
-    setTimeout(() => {
-        showHUD();
-        updateHUDSanity(playerSanity);
-        setMobileHUD(isMobile); // Update prompt text for mobile
-        if (isMobile) {
-            initTouchControls(camera, resumeAudioContext, checkPhoneTap);
-        }
-    }, WAKEUP_DURATION * 1000);
 
     if (isRestart) {
         createGlobalResources(currentLevel.theme);
@@ -447,7 +573,7 @@ export async function initGame(level = currentLevel, controller = null) {
             bloomPass.enabled = qualitySettings.bloom;
         }
         if (postPass) {
-            postPass.enabled = qualitySettings.postEffects;
+            postPass.enabled = qualitySettings.postEffects && settings.motion;
         }
         camera.position.set(0, 1.7, 0);
         camera.rotation.set(0, 0, 0);
@@ -466,6 +592,7 @@ export async function initGame(level = currentLevel, controller = null) {
 
         isStarted = true;
         refreshChunks(true);
+        beginSession();
         return;
     }
 
@@ -487,6 +614,8 @@ export async function initGame(level = currentLevel, controller = null) {
 
     renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
     applyRendererSize();
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     document.body.append(renderer.domElement);
@@ -504,7 +633,7 @@ export async function initGame(level = currentLevel, controller = null) {
     composer.addPass(bloomPass);
 
     postPass = new ShaderPass(POST_SHADER);
-    postPass.enabled = qualitySettings.postEffects;
+    postPass.enabled = qualitySettings.postEffects && settings.motion;
     composer.addPass(postPass);
 
     wakeupPass = new ShaderPass(WAKEUP_SHADER);
@@ -517,6 +646,7 @@ export async function initGame(level = currentLevel, controller = null) {
     fadePass.uniforms.fadeAmount.value = 0.0;
     fadePass.enabled = false;
     composer.addPass(fadePass);
+    composer.addPass(new OutputPass());
 
     wakeupStartTime = performance.now();
 
@@ -525,21 +655,24 @@ export async function initGame(level = currentLevel, controller = null) {
     ambientLight = new THREE.AmbientLight(currentLevel.theme.ambientLightColor, currentLevel.theme.ambientLightIntensity);
     scene.add(ambientLight);
 
-    playerLight = new THREE.PointLight(currentLevel.theme.playerLightColor, currentLevel.theme.playerLightIntensity, 10, 2);
-    playerLight.position.set(0, 0, 0);
-    camera.add(playerLight);
     scene.add(camera);
+    flashlight = createTorch(camera);
 
     createHUD();
 
-    initKeyboardControls(toggleDebugMode, cycleSanityLevel, interactWithPhone);
+    initKeyboardControls(toggleDebugMode, cycleSanityLevel, interactWithPhone, toggleTorch);
     initMouseControls(renderer, camera, resumeAudioContext);
 
     loadAmbientSounds();
-    loadPhonePickupSound();
+
     loadKidsLaughSound();
-    setTimeout(scheduleAmbientFootsteps, 3000);
-    setTimeout(scheduleAmbientDoorClose, 6000);
+    bindSessionUI({ resume: resumeGame, leave: resetGameState, pause: pauseGame, torch: toggleTorch, answer: interactWithPhone, sprint: (held) => { mobileSprint = held; }, settings: applySettings });
+    document.addEventListener('pointerlockchange', () => {
+        if (document.pointerLockElement === renderer.domElement) activateControls();
+        else pauseGame();
+    });
+    document.addEventListener('visibilitychange', () => { if (document.hidden) pauseGame(); });
+    globalThis.addEventListener('blur', pauseGame);
 
     globalThis.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight;
@@ -551,7 +684,28 @@ export async function initGame(level = currentLevel, controller = null) {
     isStarted = true;
     refreshChunks(true);
 
+    beginSession();
     animate();
+}
+
+function beginSession() {
+    clearTimeout(wakeupTimer);
+    wakeupTimer = setTimeout(() => {
+        if (!isStarted) return;
+        showHUD();
+        updateHUDSanity(playerSanity);
+        setMobileHUD(isMobileDevice());
+    }, WAKEUP_DURATION * 1000);
+    if (isMobileDevice()) initTouchControls(camera, resumeAudioContext, checkPhoneTap);
+    applySettings();
+    scheduleAmbientFootsteps();
+    scheduleAmbientDoorClose();
+    showTransmission('Follow the ringing. Connect three different phones. Each call brings you back.', 12);
+    if (isMobileDevice()) activateControls();
+    else {
+        showSessionOverlay('ready', session);
+        suspendAudio();
+    }
 }
 
 function cacheDomElements() {
@@ -654,14 +808,10 @@ function updateProfileDisplay(currentTime) {
 }
 
 function updatePlayerMovement(delta, isMobile) {
-    const speed = 4;
     const friction = 12;
 
-    velocity.x -= velocity.x * friction * delta;
-    velocity.z -= velocity.z * friction * delta;
-
     movementInput.set(0, 0, 0);
-    const { moveForward, moveBackward, moveLeft, moveRight } = getMovementState();
+    const { moveForward, moveBackward, moveLeft, moveRight, sprint } = getMovementState();
 
     if (moveForward) movementInput.z -= 1;
     if (moveBackward) movementInput.z += 1;
@@ -674,7 +824,9 @@ function updatePlayerMovement(delta, isMobile) {
         movementInput.z += joystickInput.y;
     }
 
-    movementInput.normalize();
+    if (movementInput.lengthSq() > 1) movementInput.normalize();
+    const sprinting = advanceVitals(session, delta, movementInput.lengthSq() > 0.01, sprint || mobileSprint);
+    const speed = sprinting ? 6.6 : 3.6;
 
     forwardDirection.set(0, 0, -1).applyQuaternion(camera.quaternion);
     forwardDirection.y = 0;
@@ -689,16 +841,30 @@ function updatePlayerMovement(delta, isMobile) {
         .multiplyScalar(-movementInput.z)
         .addScaledVector(rightDirection, movementInput.x);
 
-    velocity.addScaledVector(movementVector, speed * friction * delta);
+    velocity.lerp(movementVector.multiplyScalar(speed), 1 - Math.exp(-friction * delta));
 
     nextCameraPosition.copy(camera.position).addScaledVector(velocity, delta);
     nextCameraPosition.y = 1.7;
     handleCollision(nextCameraPosition);
+    const distance = Math.hypot(nextCameraPosition.x - camera.position.x, nextCameraPosition.z - camera.position.z);
+    session.distance += distance;
+    footstepDistance += distance;
+    if (footstepDistance > (sprinting ? 2.1 : 1.65)) {
+        playPlayerStep(sprinting);
+        footstepDistance = 0;
+    }
     camera.position.copy(nextCameraPosition);
+    if (settings.motion && distance > 0.001) camera.position.y += Math.sin(session.distance * 3.6) * (sprinting ? 0.045 : 0.018);
+    const targetFov = settings.motion && sprinting ? 85 : 80;
+    if (Math.abs(camera.fov - targetFov) > 0.01) {
+        camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, 1 - Math.exp(-delta * 6));
+        camera.updateProjectionMatrix();
+    }
+    flashlight.intensity = session.flashlight ? TORCH_INTENSITY * Math.min(1, session.battery / 12) : 0;
 }
 
 function drainPlayerSanity(delta) {
-    if (debugSanityOverride !== -1) {
+    if (debugSanityOverride !== -1 || settings.difficulty === 'explore') {
         return;
     }
 
@@ -718,22 +884,22 @@ function drainPlayerSanity(delta) {
 
 function getSanityDrainRate(sanity) {
     if (sanity <= 10) {
-        return 1.348;
+        return 0.36;
     }
 
     if (sanity <= 30) {
-        return 0.899;
+        return 0.24;
     }
 
     if (sanity <= 50) {
-        return 0.562;
+        return 0.18;
     }
 
     if (sanity <= 80) {
-        return 0.449;
+        return 0.15;
     }
 
-    return 0.337;
+    return 0.12;
 }
 
 function updateRuntimeSystems() {
@@ -756,14 +922,15 @@ function updateRuntimeSystems() {
         wallSpatialIndex,
         getMaterials(),
         isStarted,
-        playerSanity,
-        debugSanityOverride,
+        settings.difficulty === 'explore' ? 100 : playerSanity,
+        settings.difficulty === 'explore' ? -1 : debugSanityOverride,
+        session.elapsed * 1000,
     );
     recordProfile('entity', entityStart);
 
     if (postPass) {
-        postPass.uniforms.time.value = clock.elapsedTime;
-        postPass.uniforms.sanity.value = playerSanity / 100;
+        postPass.uniforms.time.value = session.elapsed;
+        postPass.uniforms.sanity.value = settings.motion ? playerSanity / 100 : 1;
     }
 }
 
@@ -804,7 +971,8 @@ function updateAudioProximity(currentTime) {
 
     const audioStart = startProfile();
     updateHumVolume(camera, lightPanels);
-    nearestPhoneDist = updatePhoneRingVolume(camera, phonePositions);
+    findNearestPhone();
+    if (!isInteractingWithPhone) updatePhoneRingVolume(camera, activePhones);
     lastAudioProximityUpdate = currentTime;
     recordProfile('proximity', audioStart);
 }
@@ -863,14 +1031,14 @@ function updateFadeEffect() {
         return;
     }
 
-    const elapsed = (performance.now() - fadeStartTime) / 1000;
+    const elapsed = Math.max(0, (performance.now() - fadeStartTime) / 1000);
     const totalDuration = isSanityGameOver ? FADE_DURATION + GAME_OVER_DELAY : FADE_DURATION;
     const fadeProgress = Math.min(elapsed / FADE_DURATION, 1);
 
     fadePass.uniforms.fadeAmount.value = fadeProgress ** 2;
 
     if (elapsed >= totalDuration) {
-        resetGameState();
+        finishExpedition();
     }
 }
 
@@ -901,8 +1069,4 @@ function applyLevelTheme(level) {
         ambientLight.intensity = level.theme.ambientLightIntensity;
     }
 
-    if (playerLight) {
-        playerLight.color.setHex(level.theme.playerLightColor);
-        playerLight.intensity = level.theme.playerLightIntensity;
-    }
 }
