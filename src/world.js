@@ -1,6 +1,9 @@
+import { bakeFixtureLighting, createFixtureBakeContext, FIXTURE_LIGHT_RANGE } from './lighting.js';
+import { isPhoneChunk, isFixturePowered } from './world-layout.js';
+import { dressChunk } from './scenery.js';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { CHUNK_SIZE, RENDER_DIST, PRELOAD_DIST, PHONE_EXCLUSION_DIST } from './constants.js';
+import { CHUNK_SIZE, RENDER_DIST, PRELOAD_DIST } from './constants.js';
 
 /**
  * World generation and chunk management
@@ -127,7 +130,7 @@ function removeBoundaryWalls(horizontalWalls, verticalWalls, gridSize) {
     }
 }
 
-function generateWallGrid(cx, cz, gridSize) {
+export function generateWallGrid(cx, cz, gridSize) {
     const seed = ((cx * 73856093) ^ (cz * 19349663)) >>> 0;
     const random = seededRandom(seed);
     const horizontalWalls = [];
@@ -151,7 +154,28 @@ function generateWallGrid(cx, cz, gridSize) {
         }
     }
 
+    connectRooms(horizontalWalls, verticalWalls, gridSize, random);
     return { horizontalWalls, verticalWalls };
+}
+
+// Carve a spanning tree so no generated room can be isolated from a boundary exit.
+function connectRooms(horizontal, vertical, size, random) {
+    const visited = new Set(['0,0']);
+    const stack = [[0, 0]];
+    while (stack.length > 0) {
+        const [x, z] = stack.at(-1);
+        const neighbors = [[x + 1, z], [x - 1, z], [x, z + 1], [x, z - 1]]
+            .filter(([nx, nz]) => nx >= 0 && nz >= 0 && nx < size && nz < size && !visited.has(`${nx},${nz}`));
+        if (neighbors.length === 0) {
+            stack.pop();
+            continue;
+        }
+        const [nx, nz] = neighbors[Math.floor(random() * neighbors.length)];
+        if (nx === x) {horizontal[Math.max(z, nz)][x] = false;}
+        else {vertical[Math.max(x, nx)][z] = false;}
+        visited.add(`${nx},${nz}`);
+        stack.push([nx, nz]);
+    }
 }
 
 function createNormalLine(origin, direction, material) {
@@ -323,8 +347,12 @@ function addLightPanels(group, chunkState, resources, gridSize, cellSize, cx, cz
             );
             tempPanelMatrix.compose(tempPanelPosition, tempPanelQuaternion, tempPanelScale);
             panels.setMatrixAt(panelIndex, tempPanelMatrix);
+            const powered = isFixturePowered(cx, cz, panelIndex);
+            const brightness = powered ? 1 : 0.005;
+            panels.setColorAt(panelIndex, new THREE.Color(brightness, brightness * 0.97, brightness * 0.83));
             chunkState.lightPanels.push({
                 userData: {
+                    powered,
                     worldPosition: new THREE.Vector3(
                         cx * CHUNK_SIZE + tempPanelPosition.x,
                         tempPanelPosition.y,
@@ -452,15 +480,15 @@ function maybeAddOutlet(group, wallInfo, seed, chunkState, debugNormals, debugMo
 }
 
 function maybeAddPhone(group, wallInfo, seed, cx, cz, chunkState, debugNormals, debugMode, wallPhoneModel) {
-    if (!wallPhoneModel || seededNoise(seed) > 0.005) {
+    if (!wallPhoneModel) {
         return;
     }
 
     const normal = wallInfo.normals[seededNoise(seed + 1) > 0.5 ? 0 : 1];
     const { offsetX, offsetZ } = getWallAttachmentOffset(wallInfo, seed + 3, 5);
     const phoneHeight = 1.7;
-    const phoneX = wallInfo.center.x + offsetX + normal.x * 0.15;
-    const phoneZ = wallInfo.center.z + offsetZ + normal.z * 0.15;
+    const phoneX = wallInfo.center.x + offsetX + normal.x * 0.23;
+    const phoneZ = wallInfo.center.z + offsetZ + normal.z * 0.23;
     const phone = wallPhoneModel.clone();
 
     phone.position.set(phoneX, phoneHeight, phoneZ);
@@ -479,15 +507,15 @@ function maybeAddPhone(group, wallInfo, seed, cx, cz, chunkState, debugNormals, 
 }
 
 function addPropsToChunk(group, chunkState, wallsInChunk, cx, cz, resources, debugNormals, debugMode) {
-    const chunkDistanceFromSpawn = Math.max(Math.abs(cx), Math.abs(cz));
-    const phonesAllowed = chunkDistanceFromSpawn >= PHONE_EXCLUSION_DIST;
+    const phonesAllowed = isPhoneChunk(cx, cz);
     const seed = (cx * 12345) ^ (cz * 54321);
 
+    const phoneWall = wallsInChunk[Math.floor(seededNoise(seed + 73) * wallsInChunk.length)];
     for (const wallInfo of wallsInChunk) {
         const wallSeed = seed + wallInfo.center.x * 1000 + wallInfo.center.z * 2000;
         maybeAddOutlet(group, wallInfo, wallSeed, chunkState, debugNormals, debugMode, resources.outletModel);
 
-        if (phonesAllowed) {
+        if (phonesAllowed && wallInfo === phoneWall) {
             const phoneSeed = seed + wallInfo.center.x * 3000 + wallInfo.center.z * 4000 + 12345;
             maybeAddPhone(group, wallInfo, phoneSeed, cx, cz, chunkState, debugNormals, debugMode, resources.wallPhoneModel);
         }
@@ -510,6 +538,31 @@ function mergeChunkCollections(chunkState, walls, lightPanels, phonePositions, p
     phoneMeshes.push(...chunkState.raycastTargets);
 }
 
+export function createChunkLightingContext(cx, cz) {
+    const lightingState = createChunkState();
+    for (let nx = cx - 1; nx <= cx + 1; nx++) {
+        for (let nz = cz - 1; nz <= cz + 1; nz++) {
+            const grid = generateWallGrid(nx, nz, GRID_SIZE);
+            const positions = buildWallPositions(grid.horizontalWalls, grid.verticalWalls, GRID_SIZE, CELL_SIZE);
+            addWallCollisionRecords(lightingState, positions.verticalPositions, nx, nz, tempWallSize.set(WALL_THICKNESS, WALL_HEIGHT, WALL_LENGTH_V));
+            addWallCollisionRecords(lightingState, positions.horizontalPositions, nx, nz, tempWallSize.set(WALL_LENGTH_H, WALL_HEIGHT, WALL_THICKNESS));
+            for (let x = 0; x < GRID_SIZE; x++) {
+                for (let z = 0; z < GRID_SIZE; z++) {
+                    const px = nx * CHUNK_SIZE - 8 + x * CELL_SIZE;
+                    const pz = nz * CHUNK_SIZE - 8 + z * CELL_SIZE;
+                    const reach = CHUNK_SIZE / 2 + FIXTURE_LIGHT_RANGE;
+                    if (Math.abs(px - cx * CHUNK_SIZE) > reach || Math.abs(pz - cz * CHUNK_SIZE) > reach) continue;
+                    lightingState.lightPanels.push({ userData: {
+                        powered: isFixturePowered(nx, nz, x * GRID_SIZE + z),
+                        worldPosition: new THREE.Vector3(px, 2.99, pz),
+                    } });
+                }
+            }
+        }
+    }
+    return createFixtureBakeContext(lightingState.lightPanels, lightingState.walls);
+}
+
 export function generateChunk(cx, cz, scene, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes) {
     const group = new THREE.Group();
     const chunkState = createChunkState();
@@ -527,9 +580,12 @@ export function generateChunk(cx, cz, scene, resources, debugMode, debugNormals,
 
     const wallsInChunk = buildWallsInChunk(horizontalWalls, verticalWalls, gridSize, cellSize, group, debugNormals);
     addPropsToChunk(group, chunkState, wallsInChunk, cx, cz, resources, debugNormals, debugMode);
+    dressChunk(group, wallsInChunk, horizontalPositions, verticalPositions, cx, cz);
 
     group.position.set(cx * CHUNK_SIZE, 0, cz * CHUNK_SIZE);
     scene.add(group);
+    group.userData.fixtureLighting = createChunkLightingContext(cx, cz);
+    bakeFixtureLighting(group, group.userData.fixtureLighting);
 
     const border = createChunkBorder(cx, cz, debugMode);
     scene.add(border);
@@ -655,12 +711,13 @@ function removeChunk(scene, key, chunk, chunks, chunkBorders, walls, lightPanels
 }
 
 export function updateChunks(camera, scene, chunks, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes, settings = {}) {
-    const playerChunkX = Math.floor(camera.position.x / CHUNK_SIZE);
-    const playerChunkZ = Math.floor(camera.position.z / CHUNK_SIZE);
+    const playerChunkX = Math.floor((camera.position.x + CHUNK_SIZE / 2) / CHUNK_SIZE);
+    const playerChunkZ = Math.floor((camera.position.z + CHUNK_SIZE / 2) / CHUNK_SIZE);
     const renderDist = settings.renderDist ?? RENDER_DIST;
     const preloadDist = settings.preloadDist ?? PRELOAD_DIST;
     let changed = false;
 
+    camera.updateMatrixWorld();
     frustumMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     frustum.setFromProjectionMatrix(frustumMatrix);
 
@@ -669,6 +726,11 @@ export function updateChunks(camera, scene, chunks, resources, debugMode, debugN
 
     for (const [key, chunk] of chunks.entries()) {
         if (!activeKeys.has(key)) {
+            const removedHelpers = new Set();
+            chunk.traverse((child) => { if (child.isLine || child.isLineSegments) removedHelpers.add(child); });
+            for (let index = debugNormals.length - 1; index >= 0; index--) {
+                if (removedHelpers.has(debugNormals[index])) debugNormals.splice(index, 1);
+            }
             removeChunk(scene, key, chunk, chunks, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes);
             changed = true;
         }

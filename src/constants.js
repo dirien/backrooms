@@ -7,7 +7,7 @@ export const CHUNK_SIZE = 24;
 export const RENDER_DIST = 2;
 export const PRELOAD_DIST = 4;
 export const PLAYER_RADIUS = 0.5;
-export const PHONE_EXCLUSION_DIST = 6;
+export const PHONE_SECTOR_SIZE = 6;
 
 // Entity system
 export const ENTITY_DISAPPEAR_DISTANCE = 8;

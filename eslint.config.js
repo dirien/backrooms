@@ -9,14 +9,22 @@ const hotPathFunctionSelector =
 
 export default [
     {
-        ignores: ['dist/**', 'node_modules/**', 'eslint.config.js'],
+        ignores: ['dist/**', 'node_modules/**', '.claude/**', 'test-results/**', 'playwright-report/**', 'eslint.config.js'],
     },
     js.configs.recommended,
     importPlugin.flatConfigs.recommended,
     sonarjs.configs.recommended,
     unicorn.configs['flat/recommended'],
     {
-        files: ['src/**/*.js', 'vite.config.js'],
+        files: ['scripts/**/*.mjs'],
+        languageOptions: {
+            ecmaVersion: 'latest',
+            sourceType: 'module',
+            globals: globals.node,
+        },
+    },
+    {
+        files: ['src/**/*.js', 'tests/**/*.js', 'playwright.config.js', 'vite.config.js'],
         languageOptions: {
             ecmaVersion: 'latest',
             sourceType: 'module',

@@ -16,7 +16,8 @@ let humSource = null;
 let phoneRingBuffer = null;
 let phoneRingSource = null;
 let phoneRingGainNode = null;
-let phonePickupBuffer = null;
+let phonePan = null;
+let audioVolume = 0.7;
 
 // Kids laugh looping sound
 let kidsLaughSource = null;
@@ -60,7 +61,7 @@ function initMasterDistortionChain() {
 
     // Create master output gain node
     masterOutput = audioCtx.createGain();
-    masterOutput.gain.value = 1.0;
+    masterOutput.gain.value = audioVolume;
     masterOutput.connect(audioCtx.destination);
 
     // Create dry path (unaffected signal)
@@ -195,7 +196,10 @@ function startPhoneRingSound() {
     phoneRingGainNode.gain.value = 0;
 
     phoneRingSource.connect(phoneRingGainNode);
-    phoneRingGainNode.connect(getDistortedOutput());
+    phonePan ??= audioCtx.createStereoPanner();
+    phonePan.disconnect();
+    phoneRingGainNode.connect(phonePan);
+    phonePan.connect(getDistortedOutput());
     phoneRingSource.start();
 }
 
@@ -237,16 +241,6 @@ function restartPhoneRingSound() {
     phoneRingSource.start();
 }
 
-export async function loadPhonePickupSound() {
-    try {
-        const response = await fetch('https://cdn.pixabay.com/download/audio/2022/03/10/audio_6650ed59b7.mp3?filename=phone-pick-up-46796.mp3');
-        const arrayBuffer = await response.arrayBuffer();
-        phonePickupBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-    } catch (error) {
-        console.warn('Failed to load phone pick-up sound:', error);
-    }
-}
-
 export async function loadKidsLaughSound() {
     try {
         const response = await fetch('/sounds/kids-laugh.mp3');
@@ -266,6 +260,7 @@ export function updateHumVolume(camera, lightPanels) {
     const maxDistSq = maxDist * maxDist;
 
     for (const panel of lightPanels) {
+        if (!panel.userData.powered) continue;
         const panelWorldPos = panel.userData.worldPosition;
         const distSq = playerPos.distanceToSquared(panelWorldPos);
         if (distSq < minDistSq) minDistSq = distSq;
@@ -274,7 +269,7 @@ export function updateHumVolume(camera, lightPanels) {
 
     const minDist = Math.sqrt(minDistSq);
     const proximity = Math.max(0, 1 - (minDist / maxDist));
-    const volume = 0.18 + proximity * 0.54;
+    const volume = 0.015 + proximity * 0.45;
 
     humGainNode.gain.setTargetAtTime(volume, audioCtx.currentTime, 0.1);
 }
@@ -288,6 +283,7 @@ export function updatePhoneRingVolume(camera, phonePositions) {
     }
 
     let minDistSq = Infinity;
+    let nearest = null;
     const playerPos = camera.position;
     const maxDistSq = PHONE_AUDIO_MAX_DIST * PHONE_AUDIO_MAX_DIST;
 
@@ -295,11 +291,15 @@ export function updatePhoneRingVolume(camera, phonePositions) {
     // PHONE_INTERACT_DIST, so it must be the true nearest phone distance.
     for (const phonePos of phonePositions) {
         const distSq = playerPos.distanceToSquared(phonePos);
-        if (distSq < minDistSq) minDistSq = distSq;
+        if (distSq < minDistSq) { minDistSq = distSq; nearest = phonePos; }
     }
 
     const minDist = minDistSq > maxDistSq ? PHONE_AUDIO_MAX_DIST : Math.sqrt(minDistSq);
     const volume = getPhoneRingVolume(minDist);
+    if (nearest && phonePan) {
+        const angle = Math.atan2(nearest.x - playerPos.x, -(nearest.z - playerPos.z)) + camera.rotation.y;
+        phonePan.pan.setTargetAtTime(Math.sin(angle) * 0.85, audioCtx.currentTime, 0.1);
+    }
 
     phoneRingGainNode.gain.setTargetAtTime(volume, audioCtx.currentTime, 0.1);
 
@@ -415,7 +415,7 @@ export function startGameAudio() {
 
     // Reset master output
     if (masterOutput) {
-        masterOutput.gain.value = 1.0;
+        masterOutput.gain.value = audioVolume;
     }
 
     // Restart hum sound
@@ -430,17 +430,44 @@ export function startGameAudio() {
 }
 
 export function playPhonePickup() {
-    if (phonePickupBuffer && audioCtx) {
-        const source = audioCtx.createBufferSource();
-        source.buffer = phonePickupBuffer;
-
-        const gainNode = audioCtx.createGain();
-        gainNode.gain.value = 0.8;
-
-        source.connect(gainNode);
-        gainNode.connect(getDistortedOutput());
-        source.start();
+    if (!audioCtx) return;
+    for (const [frequency, delay] of [[480, 0], [620, 0.16], [440, 0.32]]) {
+        const tone = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        tone.frequency.value = frequency;
+        const start = audioCtx.currentTime + delay;
+        gain.gain.setValueAtTime(0, start);
+        gain.gain.linearRampToValueAtTime(0.08, start + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.001, start + 0.15);
+        tone.connect(gain);
+        gain.connect(getDistortedOutput());
+        tone.start(start);
+        tone.stop(start + 0.16);
+        tone.addEventListener('ended', () => { tone.disconnect(); gain.disconnect(); });
     }
+}
+
+export function playPlayerStep(sprinting) {
+    if (!audioCtx || audioCtx.state !== 'running' || !footstepsBuffer) return;
+    const source = audioCtx.createBufferSource();
+    const gain = audioCtx.createGain();
+    source.buffer = footstepsBuffer;
+    source.playbackRate.value = sprinting ? 1.15 : 0.9;
+    gain.gain.setValueAtTime(sprinting ? 0.16 : 0.10, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.23);
+    source.connect(gain);
+    gain.connect(getDistortedOutput());
+    source.start(0, 0, Math.min(0.25, footstepsBuffer.duration));
+    source.addEventListener('ended', () => { source.disconnect(); gain.disconnect(); });
+}
+
+export function setAudioVolume(volume) {
+    audioVolume = volume;
+    if (masterOutput && audioCtx) masterOutput.gain.setTargetAtTime(volume, audioCtx.currentTime, 0.05);
+}
+
+export function suspendAudio() {
+    if (audioCtx?.state === 'running') audioCtx.suspend();
 }
 
 export function playAmbientFootsteps(isStarted) {
