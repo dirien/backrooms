@@ -1,5 +1,9 @@
+import { randomInt } from './random.js';
+
 /** Session rules are independent of rendering and audio. */
 export const REQUIRED_CALLS = 3;
+export const PHONE_SANITY_RECOVERY = 8;
+export const SANITY_EFFECT_THRESHOLD = 50;
 export const TRANSMISSIONS = [
     '“You can hear me. Good. This line is compromised. Find another telephone.”',
     '“One more connection. Keep your eyes on the rooms. It moves when you stop listening.”',
@@ -10,8 +14,24 @@ export function phoneId(position) {
     return `${position.x.toFixed(2)},${position.z.toFixed(2)}`;
 }
 
-export function createExpedition() {
-    return { calls: new Set(), elapsed: 0, distance: 0, stamina: 100, exhausted: false, battery: 100, flashlight: true };
+export function createExpedition(phoneSeed = randomInt(2 ** 32)) {
+    return { calls: new Set(), phoneSeed, elapsed: 0, distance: 0, stamina: 100, exhausted: false, battery: 100, flashlight: true };
+}
+
+// Reach the unsettling half of the sanity meter earlier, then leave enough time
+// to experience it and recover. Integrate across the threshold consistently even
+// when callers advance by different time steps.
+export function advanceSanity(sanity, seconds) {
+    const calmRate = 0.3;
+    const distressedRate = 0.14;
+    const duration = Math.max(0, seconds);
+    const calmTime = Math.min(duration, Math.max(0, sanity - SANITY_EFFECT_THRESHOLD) / calmRate);
+    return Math.max(0, sanity - calmTime * calmRate - (duration - calmTime) * distressedRate);
+}
+
+export function recoverPhoneSanity(sanity, calls) {
+    // The last line ends the run; it should not inflate the finishing sanity.
+    return calls > 0 && calls < REQUIRED_CALLS ? Math.min(100, sanity + PHONE_SANITY_RECOVERY) : sanity;
 }
 
 export function connectPhone(session, position) {

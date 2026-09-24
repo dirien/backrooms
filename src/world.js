@@ -506,18 +506,19 @@ function maybeAddPhone(group, wallInfo, seed, cx, cz, chunkState, debugNormals, 
     addDebugHelpers(phone, group, debugNormals, debugMode, 0x00ffff, 0.5);
 }
 
-function addPropsToChunk(group, chunkState, wallsInChunk, cx, cz, resources, debugNormals, debugMode) {
-    const phonesAllowed = isPhoneChunk(cx, cz);
+function addPropsToChunk(group, chunkState, wallsInChunk, cx, cz, resources, debugNormals, debugMode, phoneSeed) {
+    const phonesAllowed = isPhoneChunk(cx, cz, phoneSeed);
     const seed = (cx * 12345) ^ (cz * 54321);
+    const phoneLayoutSeed = (seed ^ phoneSeed) >>> 0;
 
-    const phoneWall = wallsInChunk[Math.floor(seededNoise(seed + 73) * wallsInChunk.length)];
+    const phoneWall = wallsInChunk[Math.floor(seededNoise(phoneLayoutSeed + 73) * wallsInChunk.length)];
     for (const wallInfo of wallsInChunk) {
         const wallSeed = seed + wallInfo.center.x * 1000 + wallInfo.center.z * 2000;
         maybeAddOutlet(group, wallInfo, wallSeed, chunkState, debugNormals, debugMode, resources.outletModel);
 
         if (phonesAllowed && wallInfo === phoneWall) {
-            const phoneSeed = seed + wallInfo.center.x * 3000 + wallInfo.center.z * 4000 + 12345;
-            maybeAddPhone(group, wallInfo, phoneSeed, cx, cz, chunkState, debugNormals, debugMode, resources.wallPhoneModel);
+            const attachmentSeed = phoneLayoutSeed + wallInfo.center.x * 3000 + wallInfo.center.z * 4000 + 12345;
+            maybeAddPhone(group, wallInfo, attachmentSeed, cx, cz, chunkState, debugNormals, debugMode, resources.wallPhoneModel);
         }
     }
 }
@@ -563,7 +564,7 @@ export function createChunkLightingContext(cx, cz) {
     return createFixtureBakeContext(lightingState.lightPanels, lightingState.walls);
 }
 
-export function generateChunk(cx, cz, scene, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes) {
+export function generateChunk(cx, cz, scene, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes, phoneSeed = 0) {
     const group = new THREE.Group();
     const chunkState = createChunkState();
     const gridSize = GRID_SIZE;
@@ -579,7 +580,7 @@ export function generateChunk(cx, cz, scene, resources, debugMode, debugNormals,
     addLightPanels(group, chunkState, resources, gridSize, cellSize, cx, cz);
 
     const wallsInChunk = buildWallsInChunk(horizontalWalls, verticalWalls, gridSize, cellSize, group, debugNormals);
-    addPropsToChunk(group, chunkState, wallsInChunk, cx, cz, resources, debugNormals, debugMode);
+    addPropsToChunk(group, chunkState, wallsInChunk, cx, cz, resources, debugNormals, debugMode, phoneSeed);
     dressChunk(group, wallsInChunk, horizontalPositions, verticalPositions, cx, cz);
 
     group.position.set(cx * CHUNK_SIZE, 0, cz * CHUNK_SIZE);
@@ -640,7 +641,7 @@ function getActiveChunkKeys(playerChunkX, playerChunkZ, renderDist, preloadDist)
     return activeKeys;
 }
 
-function addMissingChunks(activeKeys, scene, chunks, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes) {
+function addMissingChunks(activeKeys, scene, chunks, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes, phoneSeed) {
     let changed = false;
 
     for (const key of activeKeys) {
@@ -651,7 +652,7 @@ function addMissingChunks(activeKeys, scene, chunks, resources, debugMode, debug
         const [chunkX, chunkZ] = key.split(',').map(Number);
         chunks.set(
             key,
-            generateChunk(chunkX, chunkZ, scene, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes),
+            generateChunk(chunkX, chunkZ, scene, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes, phoneSeed),
         );
         changed = true;
     }
@@ -722,7 +723,7 @@ export function updateChunks(camera, scene, chunks, resources, debugMode, debugN
     frustum.setFromProjectionMatrix(frustumMatrix);
 
     const activeKeys = getActiveChunkKeys(playerChunkX, playerChunkZ, renderDist, preloadDist);
-    changed = addMissingChunks(activeKeys, scene, chunks, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes);
+    changed = addMissingChunks(activeKeys, scene, chunks, resources, debugMode, debugNormals, chunkBorders, walls, lightPanels, phonePositions, phoneMeshes, settings.phoneSeed ?? 0);
 
     for (const [key, chunk] of chunks.entries()) {
         if (!activeKeys.has(key)) {

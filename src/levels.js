@@ -1,3 +1,5 @@
+import { PHONE_SANITY_RECOVERY } from './expedition.js';
+
 export const DEFAULT_LEVEL_ID = 'lobby';
 
 export const BACKROOM_LEVELS = [
@@ -9,7 +11,7 @@ export const BACKROOM_LEVELS = [
         detailSubtitle: 'The fluorescent maze that never lets you settle.',
         menuLabel: 'The Lobby',
         menuStatus: 'Signal detected',
-        objective: 'Connect three different telephone lines to guide a rescue signal to your location. Each call restores 25 sanity.',
+        objective: `Connect three different telephone lines to guide a rescue signal to your location. The first two calls restore ${PHONE_SANITY_RECOVERY} sanity; the final call brings rescue.`,
         summary: 'The classic yellow-office sprawl. Endless turns. Buzzing lights. A telephone hidden deeper than it should be.',
         teaser: 'A procedural labyrinth of damp carpet, paper walls, and stale electric light.',
         detailParagraphs: [
