@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Backrooms — Signal Lost</title>
     <meta name="description" content="Enter Level 0. Follow the ringing, connect three phone lines, and escape before your sanity fades. Play this Backrooms horror game in your browser.">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230a0a08'/%3E%3Crect x='9' y='5' width='14' height='23' fill='none' stroke='%23d9c98a' stroke-width='2'/%3E%3Ccircle cx='19.5' cy='17' r='1.6' fill='%23d9c98a'/%3E%3C/svg%3E">
     <link rel="canonical" href="https://backrooms-tau.vercel.app/">
     <meta property="og:type" content="website">
     <meta property="og:site_name" content="Backrooms — Signal Lost">
@@ -426,6 +427,34 @@
             color: var(--text-ghost);
         }
 
+        /* which AI model built the level */
+        .level-model {
+            position: relative;
+            z-index: 1;
+            padding-top: 10px;
+            border-top: 1px solid var(--border-dim);
+            color: var(--text-ghost);
+            font-size: 0.6rem;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+        }
+
+        .level-model b {
+            color: var(--tile-accent, var(--level-accent));
+            font-weight: 600;
+        }
+
+        .detail-model {
+            margin: 0;
+            color: var(--level-accent);
+            font-size: 0.8rem;
+            letter-spacing: 0.08em;
+        }
+
+        #detail-model-section[hidden] {
+            display: none;
+        }
+
         /* ═══════════════════════════════════════════
            DETAIL VIEW – dossier style
            ═══════════════════════════════════════════ */
@@ -477,6 +506,7 @@
 
         .detail-copy {
             display: grid;
+            align-content: start;
             gap: 12px;
             padding: 24px 28px;
             border-right: 1px solid var(--border-dim);
@@ -762,6 +792,10 @@
                             <div>
                                 <h3>Field notes</h3>
                                 <ul id="detail-features"></ul>
+                            </div>
+                            <div id="detail-model-section">
+                                <h3>Built with</h3>
+                                <p id="detail-model" class="detail-model"></p>
                             </div>
                         </aside>
                     </div>

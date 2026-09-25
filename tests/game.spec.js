@@ -2,7 +2,8 @@ import { test, expect } from '@playwright/test';
 import { getPhoneChunkForSector, isPhoneChunk } from '../src/world-layout.js';
 import * as THREE from 'three';
 import { sampleFixtureIrradiance } from '../src/lighting.js';
-import { generateWallGrid, createChunkLightingContext } from '../src/world.js';
+import { generateWallGrid } from '../src/levels/lobby/layout.js';
+import { createChunkLightingContext } from '../src/levels/lobby/chunk.js';
 import { createExpedition, connectPhone, advanceVitals, advanceSanity, recoverPhoneSanity, REQUIRED_CALLS } from '../src/expedition.js';
 
 // Expose test controls only in intercepted source; the shipped game has no test API.
@@ -85,8 +86,8 @@ async function instrument(page) {
 const state = (page) => page.evaluate(() => globalThis.expeditionTest.state());
 const value = async (page, key) => { const snapshot = await state(page); return snapshot[key]; };
 const phone = (page, blocked = false) => page.evaluate((blockedSide) => globalThis.expeditionTest.phone(blockedSide), blocked);
-async function launch(page) {
-    await page.locator('[data-level-id="lobby"]').click();
+async function launch(page, levelId = 'lobby') {
+    await page.locator(`[data-level-id="${levelId}"]`).click();
     await page.locator('#launch-level').click();
     await expect(page.locator('#resume-game')).toBeVisible();
     const spawn = await state(page);
@@ -164,6 +165,37 @@ test('desktop exploration, pause, blocked calls, escape, restart and loss', asyn
     expect(await value(page, 'calls')).toBe(0);
     await page.evaluate(() => globalThis.expeditionTest.lose());
     await expect(page.locator('#session-title')).toHaveText('Lost to the rooms.', { timeout: 15000 });
+    expect(errors).toEqual([]);
+});
+
+test('Level 5 loads its own world, copy and house phones, then hands back to Level 0', async ({ page }) => {
+    const errors = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
+    await instrument(page);
+    await page.goto('/?quality=low');
+    await expect(page.locator('[data-level-id="lobby"] .level-model')).toHaveText('Built with GPT-6 Astra');
+    await expect(page.locator('[data-level-id="hotel"] .level-model')).toHaveText('Built with Claude Opus 5.5');
+    await launch(page, 'hotel');
+    await expect(page.locator('#field-archive')).toHaveText('ARCHIVE 005 / LEVEL 5');
+    await expect(page.locator('#field-objective')).toHaveText('Connect three house phones');
+    expect(await value(page, 'yaw')).toBeCloseTo(Math.PI / 2, 5);
+    await expect.poll(async () => await value(page, 'chunks')).toBeGreaterThan(0);
+    const first = await page.evaluate(() => globalThis.expeditionTest.phoneSnapshot());
+    expect(first).toHaveLength(1);
+    expect(await page.evaluate(() => globalThis.expeditionTest.phoneSnapshot(true))).toEqual(first);
+    for (let calls = 1; calls <= 3; calls++) {
+        expect(await phone(page)).toBe(true);
+        await page.keyboard.press('KeyE');
+        await expect.poll(async () => await value(page, 'calls')).toBe(calls);
+        if (calls === 1) await expect(page.locator('#transmission')).toContainText('Front desk');
+    }
+    await expect(page.locator('#session-title')).toHaveText('The front desk answered.', { timeout: 15000 });
+    await page.locator('#leave-game').click();
+    await launch(page, 'lobby');
+    await expect(page.locator('#field-archive')).toHaveText('ARCHIVE 001 / LEVEL 0');
+    await expect(page.locator('#field-objective')).toHaveText('Connect three telephone lines');
+    expect(await value(page, 'yaw')).toBe(0);
     expect(errors).toEqual([]);
 });
 

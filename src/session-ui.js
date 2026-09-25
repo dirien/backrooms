@@ -16,7 +16,7 @@ settings.volume = Math.max(0, Math.min(1, settings.volume));
 const root = document.createElement('div');
 root.innerHTML = `
 <section id="field-hud" hidden aria-label="Expedition status">
-    <div class="field-top"><span><i class="record-light"></i> REC <b id="field-time">00:00</b></span><span>ARCHIVE 001 / LEVEL 0</span></div>
+    <div class="field-top"><span><i class="record-light"></i> REC <b id="field-time">00:00</b></span><span id="field-archive">ARCHIVE 001 / LEVEL 0</span></div>
     <div class="field-objective"><small>ESTABLISH A WAY OUT</small><strong id="field-objective">Connect three telephone lines</strong><div id="call-progress">○ ○ ○</div></div>
     <div class="field-signal"><small>RECEIVER</small><strong id="field-signal">Searching for a line…</strong></div>
     <div class="field-vitals"><label>STAMINA <meter id="stamina" min="0" max="100" value="100"></meter></label><label>TORCH <meter id="battery" min="0" max="100" value="100"></meter><span id="torch-state">ON</span></label></div>
@@ -34,6 +34,19 @@ const hud = byId('field-hud');
 const overlay = byId('session-overlay');
 let messageUntil = 0;
 let onSettings = () => {};
+// Level definitions override these strings through setSessionCopy().
+const sessionCopy = {
+    archiveLabel: 'ARCHIVE 001 / LEVEL 0',
+    readyEyebrow: 'RECORDING 001 / SIGNAL LOST',
+    readyCopy: 'Click Begin exploration to enter Level 0. Use WASD to move and your mouse to look. Follow the ringing and press E to answer three different phones.',
+    objective: 'Connect three telephone lines',
+    finalObjective: 'Find the final line. Make contact.',
+    escapedTitle: 'You made contact.',
+    escapedCopy: 'A voice on the other end. For the first time, you are not alone.',
+    lostTitle: 'Lost to the rooms.',
+    lostCopy: 'The hum is all that remains. Follow the ringing. Each new line restores your sanity.',
+};
+const defaultSessionCopy = { ...sessionCopy };
 
 function makeSettings() {
     const section = document.createElement('div');
@@ -80,6 +93,12 @@ export function bindSessionUI(actions) {
     onSettings = actions.settings;
 }
 
+export function setSessionCopy(copy = {}) {
+    for (const key of Object.keys(sessionCopy)) sessionCopy[key] = copy[key] ?? defaultSessionCopy[key];
+    byId('field-archive').textContent = sessionCopy.archiveLabel;
+    byId('field-objective').textContent = sessionCopy.objective;
+}
+
 export function showFieldHUD(visible, mobile = false) {
     hud.hidden = !visible;
     byId('mobile-actions').hidden = !visible || !mobile;
@@ -90,8 +109,8 @@ export function showSessionOverlay(mode, session) {
     const paused = mode === 'pause' || mode === 'ready';
     const escaped = mode === 'escaped';
     const eyebrow = escaped ? 'TRANSMISSION RECEIVED' : 'RECORDING ENDS';
-    const title = escaped ? 'You made contact.' : 'Lost to the rooms.';
-    const copy = escaped ? 'A voice on the other end. For the first time, you are not alone.' : 'The hum is all that remains. Follow the ringing. Each new line restores your sanity.';
+    const title = escaped ? sessionCopy.escapedTitle : sessionCopy.lostTitle;
+    const copy = escaped ? sessionCopy.escapedCopy : sessionCopy.lostCopy;
     byId('session-eyebrow').textContent = paused ? 'SIGNAL INTERRUPTED' : eyebrow;
     byId('session-title').textContent = paused ? 'Still there?' : title;
     byId('session-copy').textContent = paused ? 'The rooms can wait. Take a breath.' : copy;
@@ -102,9 +121,9 @@ export function showSessionOverlay(mode, session) {
     byId('session-stats').hidden = mode === 'ready';
     byId('resume-game').textContent = 'Resume exploration';
     if (mode === 'ready') {
-        byId('session-eyebrow').textContent = 'RECORDING 001 / SIGNAL LOST';
+        byId('session-eyebrow').textContent = sessionCopy.readyEyebrow;
         byId('session-title').textContent = 'Ready to explore';
-        byId('session-copy').textContent = 'Click Begin exploration to enter Level 0. Use WASD to move and your mouse to look. Follow the ringing and press E to answer three different phones.';
+        byId('session-copy').textContent = sessionCopy.readyCopy;
         byId('resume-game').textContent = 'Begin exploration';
     }
     overlay.hidden = false;
@@ -120,7 +139,7 @@ export function showTransmission(message, seconds = 7) {
 export function updateFieldHUD(session, distance, bearing) {
     byId('field-time').textContent = formatTime(session.elapsed);
     byId('call-progress').textContent = Array.from({ length: REQUIRED_CALLS }, (_, index) => index < session.calls.size ? '●' : '○').join('  ');
-    byId('field-objective').textContent = session.calls.size === 2 ? 'Find the final line. Make contact.' : 'Connect three telephone lines';
+    byId('field-objective').textContent = session.calls.size === 2 ? sessionCopy.finalObjective : sessionCopy.objective;
     byId('stamina').value = session.stamina;
     byId('battery').value = session.battery;
     byId('torch-state').textContent = session.flashlight ? 'ON' : 'CHARGING';

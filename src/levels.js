@@ -2,9 +2,20 @@ import { PHONE_SANITY_RECOVERY } from './expedition.js';
 
 export const DEFAULT_LEVEL_ID = 'lobby';
 
+/**
+ * Menu-facing level registry. Entries hold only menu copy, an accent colour,
+ * an optional tile preview, and the AI model the level was built with (`builtWith`);
+ * `load()` imports the level's runtime definition on demand, so level code and
+ * assets stay out of the menu bundle. See src/levels/README.md to add a level.
+ */
 export const BACKROOM_LEVELS = [
     {
         id: 'lobby',
+        playable: true,
+        load: () => import('./levels/lobby/index.js'),
+        accent: '#d9c98a',
+        preview: '/graphics/lobby-preview.jpg',
+        builtWith: 'GPT-6 Astra',
         badge: 'Level 0 / Survival',
         callToAction: 'Enter Level 0',
         detailTitle: 'Level 0: The Lobby',
@@ -23,54 +34,37 @@ export const BACKROOM_LEVELS = [
             'Three transmissions, a way out, and something watching.',
             'Sprint stamina, a rechargeable torch, and a gentler Wander mode.',
         ],
-        theme: {
-            accent: '#d9c98a',
-            ambientLightColor: 0xd7d3a2,
-            ambientLightIntensity: 0.025,
-            ceilingColor: 0xbbbbbb,
-            fogColor: 0x333322,
-            fogDensity: 0.028,
-            floorColor: 0xa9a865,
-            lightPanelColor: 0xffffff,
-            sceneBackground: 0x050503,
-            wallColor: 0xffffff,
-        },
     },
     {
         id: 'hotel',
-        badge: 'Theme Preview',
-        callToAction: 'Enter Hotel Drift',
-        detailTitle: 'Hotel Drift',
-        detailSubtitle: 'Vacant corridors, old carpet, and doors that never open the same way twice.',
-        menuLabel: 'Hotel Rooms',
-        menuStatus: 'Preview Route',
-        objective: 'Cross the dim hotel ring and reach a service phone before the silence turns sentient.',
-        summary: 'A warmer, tighter backroom variant inspired by abandoned hotel hallways and sealed guest rooms.',
-        teaser: 'Burgundy shadows, brass reflections, and a corridor that feels too polite to be safe.',
+        playable: true,
+        load: () => import('./levels/hotel/index.js'),
+        accent: '#d9a066',
+        preview: '/graphics/hotel-preview.jpg',
+        builtWith: 'Claude Opus 5.5',
+        badge: 'Level 5 / Survival',
+        callToAction: 'Enter Level 5',
+        detailTitle: 'Level 5: Terror Hotel',
+        detailSubtitle: 'An endless 1930s hotel that keeps itself spotless for guests who never check out.',
+        menuLabel: 'Terror Hotel',
+        menuStatus: 'Signal detected',
+        objective: `Three house phones ring somewhere on these floors. Connect three different lines to reach the front desk. The first two calls restore ${PHONE_SANITY_RECOVERY} sanity; the final call brings rescue.`,
+        summary: 'Mahogany-red panels, brass room numbers, and patterned carpet running to a vanishing point. Somewhere, a gramophone is still playing.',
+        teaser: 'Endless corridors, locked rooms with brass numbers, and a record that never stops turning.',
         detailParagraphs: [
-            'Hotel Drift shifts the same procedural runtime into an abandoned hospitality shell. The walls darken, the light warms, and the maze feels more intimate and more predatory.',
-            'The geometry still follows the current chunk system, but the theme, tone, and onboarding copy are already separated so a custom hotel ruleset can drop in cleanly later.',
+            'Level 5 is an infinite hotel built in the 1930s and furnished a decade earlier. The halls clean themselves. The room numbers are never in order, and none of the doors will open for you.',
+            'A 1920s dance record drifts through the corridors from speakers nobody has found. Follow the house phones through the long halls, and keep moving when the whispering starts behind you.',
         ],
         features: [
-            'Dedicated level-selection tile and detail screen.',
-            'Level-specific scene palette, lighting, and menu tone.',
-            'Architecture ready for custom hotel assets and rules.',
+            'Endless corridors of red damask, cream doors, and non-sequential room numbers.',
+            'Brass house phones, gilded portraits, and a record that slows as your mind does.',
+            'Level 0 survival rules: sanity, torch, stamina, and a gentler Wander mode.',
         ],
-        theme: {
-            accent: '#d88966',
-            ambientLightColor: 0xc7a07c,
-            ambientLightIntensity: 0.025,
-            ceilingColor: 0x8e7d73,
-            fogColor: 0x1f120f,
-            fogDensity: 0.026,
-            floorColor: 0x5d2e28,
-            lightPanelColor: 0xffe1b8,
-            sceneBackground: 0x090504,
-            wallColor: 0xd7b2a4,
-        },
     },
     {
         id: 'pools',
+        playable: false,
+        accent: '#8fd5dd',
         badge: 'Theme Preview',
         callToAction: 'Enter Pool Complex',
         detailTitle: 'Pool Complex',
@@ -81,29 +75,33 @@ export const BACKROOM_LEVELS = [
         summary: 'A cold, tiled variant inspired by the Backrooms pool rooms: open chambers, damp light, and impossible depth.',
         teaser: 'Aquatic light, pale tile, and a horizon made of echoes instead of walls.',
         detailParagraphs: [
-            'Pool Complex re-skins the current procedural maze into a colder, wetter atmosphere. The same runtime now loads a different backroom identity instead of a single fixed look.',
-            'This is the staging ground for future pool-specific geometry, reflections, and acoustics. The selection flow and runtime switch are already in place.',
+            'Pool Complex is a sealed route. Its tiles, water, and acoustics have not been surveyed yet.',
         ],
         features: [
             'Dedicated level-selection tile and detail screen.',
-            'Level-specific palette, fog, and lighting setup.',
-            'Ready for future water, tile, and room-scale generation changes.',
+            'Ready for a src/levels/pools definition.',
         ],
-        theme: {
-            accent: '#8fd5dd',
-            ambientLightColor: 0x9fd6df,
-            ambientLightIntensity: 0.025,
-            ceilingColor: 0xc7ecef,
-            fogColor: 0x163740,
-            fogDensity: 0.018,
-            floorColor: 0x4a97a6,
-            lightPanelColor: 0xe8feff,
-            sceneBackground: 0x031215,
-            wallColor: 0xbce7ee,
-        },
     },
 ];
 
+const REQUIRED_DEFINITION_KEYS = ['environment', 'copy', 'loadAssets', 'getDarkenableMaterials', 'buildChunk', 'createLightingContext'];
+
 export function getLevelById(levelId) {
     return BACKROOM_LEVELS.find((level) => level.id === levelId) ?? BACKROOM_LEVELS[0];
+}
+
+// Imports a playable level's runtime definition and loads its assets.
+export async function loadLevelDefinition(level) {
+    if (!level?.playable || typeof level.load !== 'function') {
+        throw new Error(`Level "${level?.id}" is sealed.`);
+    }
+
+    const { default: definition } = await level.load();
+    const missing = REQUIRED_DEFINITION_KEYS.filter((key) => !(key in definition));
+    if (missing.length > 0) {
+        throw new Error(`Level "${level.id}" definition is missing: ${missing.join(', ')}`);
+    }
+
+    await definition.loadAssets();
+    return definition;
 }

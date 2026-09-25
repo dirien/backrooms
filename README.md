@@ -1,6 +1,6 @@
 # Backrooms — Signal Lost
 
-A browser horror game built with Three.js. Wake up in Level 0, follow the ringing, and connect three different telephone lines to establish a way out.
+A browser horror game built with Three.js. Wake up in Level 0 or Level 5, follow the ringing, and connect three different telephone lines to establish a way out.
 
 ## Play locally
 
@@ -11,13 +11,21 @@ npm install
 npm run dev -- --host 0.0.0.0
 ```
 
-Open http://localhost:5173, select **The Lobby**, and enter. Click **Resume exploration** to capture your mouse. The browser must support WebGL 2.
+Open http://localhost:5173, select **The Lobby** or **Terror Hotel**, and enter. Click **Begin exploration** to capture your mouse. The browser must support WebGL 2.
 
-When running inside a Docker sandbox, publish the port from your host first:
+When running inside a Docker sandbox, publish the port from your host first (the sandbox name is `$SANDBOX_NAME` inside the sandbox):
 
 ```bash
-sbx ports codex-backrooms --publish 5173:5173
+sbx ports <sandbox-name> --publish 5173:5173
 ```
+
+## Levels
+
+The level wall credits the AI model that built each level: Level 0 was built with GPT-6 Astra, Level 5 with Claude Opus 5.5.
+
+**Level 0: The Lobby.** The classic yellow office sprawl: damp carpet, humming fluorescent panels, and rooms that repeat just enough to feel wrong.
+
+**Level 5: Terror Hotel.** Following the Backrooms records, an endless hotel built in the 1930s and furnished a decade earlier. Corridors of mahogany-red damask panels and cream doors run to a vanishing point over red-and-gold patterned carpet. Room numbers are brass, never in sequence, and none of the doors open. Flush dome lamps buzz overhead and whole circuits fail. EXIT signs hang from the ceiling and lead nowhere. Dead ends hold brass elevators, grandfather clocks, and console tables under gilt-framed paintings. A 1920s dance record plays from speakers nobody has found, and slows as your sanity falls. Below half sanity, whispering replaces the silence behind you and the portraits' eyes start to catch the light. The objective is the same: answer three different house phones to reach the front desk.
 
 ## Controls
 
@@ -38,7 +46,7 @@ Sprinting consumes stamina. After exhaustion, recover at least 30% before sprint
 
 **Wander** mode disables sanity loss and entity encounters. Settings include volume, mouse sensitivity, graphics quality, and camera effects; they persist locally. Reduced-motion preferences disable camera effects by default. Escape, window blur, or switching tabs pauses exploration.
 
-Only Level 0 is playable. Hotel and Pool routes remain sealed previews.
+Level 0 and Level 5 are playable. The Pool route remains a sealed preview.
 
 ## Features
 
@@ -52,6 +60,8 @@ Only Level 0 is playable. Hotel and Pool routes remain sealed previews.
 - Carpet detail, baseboards, environmental signage, varied fluorescent panels, fog, and film effects
 - Accessible DOM HUD, keyboard menus, touch controls, pause settings, and replay reset
 - Chunk streaming, spatial collision queries, reusable geometry, and graphics presets
+- Level definitions loaded on demand: each level brings its own layout, materials, lighting, audio profile, and copy (see `src/levels/README.md`)
+- Level 5: procedural hotel corridors with guaranteed links between rows, dead-end alcoves, brass room-number plates, portraits that watch, gramophone jazz, and procedural whispers
 
 ## Development
 
@@ -63,6 +73,8 @@ npm run preview -- --host 0.0.0.0
 
 `?quality=desktop|mobile|low` overrides the graphics setting. `?profile` enables timing diagnostics. The Three.js vendor chunk produces an expected size warning during builds.
 
+`npm run assets:hotel [textures|models|audio]` rebuilds the Level 5 assets from their sources. It needs network access, Playwright Chromium, and ffmpeg for the audio step. Textures are drawn in `scripts/hotel-textures.html` and blended with CC0 scans, models are decimated to 512 px WebP textures with glTF Transform, and the record is trimmed into a loop.
+
 ## Tests
 
 ```bash
@@ -70,15 +82,23 @@ npx playwright install --with-deps chromium
 npm test
 ```
 
-Tests cover desktop movement, pausing, wall-blocked interactions, distinct calls, escape, loss, replay, mobile controls, Wander mode, stamina recovery, connectivity across 121 generated chunks, phone spacing across 3,600 chunks, rendered brightness with working lights, failed lights, and the torch; light blocked by walls and passed through doorways; lighting continuity across chunk borders; and visible lighting beyond the former 24-metre cutoff. Entity tests cover sanity gating, recovery, pause timing, failed-spawn cooldowns, animated dimensions, wall clearance, and the runtime sanity input. Browser tests use software WebGL at low quality; they do not benchmark hardware performance. Test-only controls are injected by Playwright and are absent from the shipped game.
+Tests cover Level 5 loading, copy, spawn direction, stable house-phone placement, escape, and handing back to Level 0; hotel corridor connectivity, walkable corridors, door and panel spacing, and light that agrees across chunk borders; desktop movement, pausing, wall-blocked interactions, distinct calls, escape, loss, replay, mobile controls, Wander mode, stamina recovery, connectivity across 121 generated chunks, phone spacing across 3,600 chunks, rendered brightness with working lights, failed lights, and the torch; light blocked by walls and passed through doorways; lighting continuity across chunk borders; and visible lighting beyond the former 24-metre cutoff. Entity tests cover sanity gating, recovery, pause timing, failed-spawn cooldowns, animated dimensions, wall clearance, and the runtime sanity input. Browser tests use software WebGL at low quality; they do not benchmark hardware performance. Test-only controls are injected by Playwright and are absent from the shipped game.
 
 ## Structure
 
-- `src/main.js`, `src/menu.js`, `src/levels.js`: menu and level selection
+- `src/main.js`, `src/menu.js`, `src/levels.js`: menu, level registry, and lazy level loading
+- `src/levels/<id>/`: one folder per playable level (layout, chunk builder, resources, definition); see `src/levels/README.md`
 - `src/runtime.js`: game lifecycle, movement, collisions, and frame loop
 - `src/expedition.js`: session progression and survival rules
 - `src/session-ui.js`, `src/session.css`, `src/hud.js`: settings, HUD, pause, and results
-- `src/world.js`, `src/world-layout.js`, `src/scenery.js`: connected maze generation, streaming, and environmental detail
+- `src/world.js`, `src/chunk-kit.js`, `src/world-layout.js`: level-agnostic chunk streaming, shared chunk-building helpers, and phone sectors
 - `src/lighting.js`: static fixture baking with wall occlusion, plus the dynamic shadow-casting torch
-- `src/audio.js`, `src/entity.js`, `src/input.js`: sound, encounters, and controls
-- `src/models.js`, `src/shaders/`: assets, materials, and screen effects
+- `src/audio.js`, `src/entity.js`, `src/input.js`: sound and level audio profiles, encounters, and controls
+- `src/models.js`, `src/shaders/`: shared asset loading, the entity model, and screen effects
+
+## Asset credits (Level 5)
+
+- Models: [Poly Haven](https://polyhaven.com) (CC0): Fancy Picture Frame 01, Vintage Telephone Wall Clock, Vintage Grandfather Clock 01, Classic Console 01.
+- Texture detail: Poly Haven (CC0): Quatrefoil Jacquard Fabric (damask panels), White Stucco (plaster, doors), Dirty Carpet (carpet fibre). The carpet ornament, door panels, room numbers, EXIT signs, and portraits are drawn procedurally.
+- Music: "Whispering" by Paul Whiteman and His Ambassador Orchestra (Victor 18690-A, 1920), public domain, via [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Paul_Whiteman_and_His_Ambassador_Orchestra_-_Whispering.flac).
+- Whispers, record crackle, and elevator bells are synthesised with the Web Audio API.

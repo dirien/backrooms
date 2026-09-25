@@ -9,6 +9,7 @@
     "lint:fix": "eslint . --fix",
     "build": "vite build",
     "social:preview": "node scripts/generate-social-preview.mjs",
+    "assets:hotel": "node scripts/generate-hotel-assets.mjs",
     "preview": "vite preview",
     "test": "playwright test"
   },
