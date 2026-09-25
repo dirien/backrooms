@@ -12,6 +12,8 @@ export function createLevelMenu(levels, onLaunch) {
     const detailBody = document.getElementById('detail-body');
     const detailFeatures = document.getElementById('detail-features');
     const detailObjective = document.getElementById('detail-objective');
+    const detailModelSection = document.getElementById('detail-model-section');
+    const detailModel = document.getElementById('detail-model');
     const launchButton = document.getElementById('launch-level');
     const backButton = document.getElementById('back-to-selection');
     const desktopControls = document.getElementById('desktop-controls');
@@ -59,14 +61,15 @@ export function createLevelMenu(levels, onLaunch) {
             if (level.id === currentLevelId) classes.push('selected');
             if (!isPlayable) classes.push('locked');
             if (level.preview) classes.push('has-preview');
-            const previewStyle = level.preview ? `style="--tile-preview: url('${level.preview}')"` : '';
+            const tileStyles = [`--tile-accent: ${level.accent}`];
+            if (level.preview) tileStyles.push(`--tile-preview: url('${level.preview}')`);
 
             return `
             <button
                 class="${classes.join(' ')}"
                 data-level-id="${level.id}"
                 type="button"
-                ${previewStyle}
+                style="${tileStyles.join('; ')}"
                 ${isPlayable ? '' : 'disabled'}
             >
                 <span class="tile-static"></span>
@@ -74,6 +77,7 @@ export function createLevelMenu(levels, onLaunch) {
                 <span class="level-name">${level.menuLabel}</span>
                 <span class="level-status">${level.menuStatus}</span>
                 <span class="level-teaser">${level.teaser}</span>
+                ${level.builtWith ? `<span class="level-model">Built with <b>${level.builtWith}</b></span>` : ''}
             </button>`;
         }).join('');
 
@@ -105,6 +109,8 @@ export function createLevelMenu(levels, onLaunch) {
         detailTagline.textContent = level.detailSubtitle;
         detailSummary.textContent = level.summary;
         detailObjective.textContent = level.objective;
+        detailModel.textContent = level.builtWith ?? '';
+        detailModelSection.hidden = !level.builtWith;
         detailBody.innerHTML = level.detailParagraphs.map((paragraph) => `<p>${paragraph}</p>`).join('');
         detailFeatures.innerHTML = level.features.map((feature) => `<li>${feature}</li>`).join('');
         launchButton.textContent = level.callToAction;

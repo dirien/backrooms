@@ -58,3 +58,4 @@ meter::-moz-meter-bar { background: #cabe88; }
 .level-tile.has-preview .level-name { color: #e5d99e; margin-top: 30px; }
 .level-tile.has-preview .level-status { color: #c8bd91; }
 .level-tile.has-preview .level-teaser { color: #c2b994; }
+.level-tile.has-preview .level-model { color: #a89e6e; border-top-color: #d9c98a33; }

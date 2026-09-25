@@ -174,6 +174,8 @@ test('Level 5 loads its own world, copy and house phones, then hands back to Lev
     page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
     await instrument(page);
     await page.goto('/?quality=low');
+    await expect(page.locator('[data-level-id="lobby"] .level-model')).toHaveText('Built with GPT-6 Astra');
+    await expect(page.locator('[data-level-id="hotel"] .level-model')).toHaveText('Built with Claude Opus 5.5');
     await launch(page, 'hotel');
     await expect(page.locator('#field-archive')).toHaveText('ARCHIVE 005 / LEVEL 5');
     await expect(page.locator('#field-objective')).toHaveText('Connect three house phones');

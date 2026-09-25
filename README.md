@@ -21,6 +21,8 @@ sbx ports <sandbox-name> --publish 5173:5173
 
 ## Levels
 
+The level wall credits the AI model that built each level: Level 0 was built with GPT-6 Astra, Level 5 with Claude Opus 5.5.
+
 **Level 0: The Lobby.** The classic yellow office sprawl: damp carpet, humming fluorescent panels, and rooms that repeat just enough to feel wrong.
 
 **Level 5: Terror Hotel.** Following the Backrooms records, an endless hotel built in the 1930s and furnished a decade earlier. Corridors of mahogany-red damask panels and cream doors run to a vanishing point over red-and-gold patterned carpet. Room numbers are brass, never in sequence, and none of the doors open. Flush dome lamps buzz overhead and whole circuits fail. EXIT signs hang from the ceiling and lead nowhere. Dead ends hold brass elevators, grandfather clocks, and console tables under gilt-framed paintings. A 1920s dance record plays from speakers nobody has found, and slows as your sanity falls. Below half sanity, whispering replaces the silence behind you and the portraits' eyes start to catch the light. The objective is the same: answer three different house phones to reach the front desk.

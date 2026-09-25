@@ -15,7 +15,8 @@ lazy-loads its definition, so level code and assets never reach the menu bundle
 1. Create `src/levels/<id>/index.js` exporting a definition (contract below).
 2. Add an entry to `BACKROOM_LEVELS` in `src/levels.js` with `playable: true`,
    `load: () => import('./levels/<id>/index.js')`, the menu copy, an `accent`
-   colour, and optionally a `preview` image for the tile.
+   colour, `builtWith` (the AI model that built the level, shown on the tile and
+   detail view), and optionally a `preview` image for the tile.
 3. Put assets under `public/graphics/<id>/`, `public/models/<id>/`, and
    `public/sounds/<id>/`. Everything in `public/` ships, so only add used files.
 4. Add tests for the layout (connectivity, walkable corridors, lighting that

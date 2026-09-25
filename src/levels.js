@@ -3,7 +3,8 @@ import { PHONE_SANITY_RECOVERY } from './expedition.js';
 export const DEFAULT_LEVEL_ID = 'lobby';
 
 /**
- * Menu-facing level registry. Entries hold only menu copy and an accent colour;
+ * Menu-facing level registry. Entries hold only menu copy, an accent colour,
+ * an optional tile preview, and the AI model the level was built with (`builtWith`);
  * `load()` imports the level's runtime definition on demand, so level code and
  * assets stay out of the menu bundle. See src/levels/README.md to add a level.
  */
@@ -14,6 +15,7 @@ export const BACKROOM_LEVELS = [
         load: () => import('./levels/lobby/index.js'),
         accent: '#d9c98a',
         preview: '/graphics/lobby-preview.jpg',
+        builtWith: 'GPT-6 Astra',
         badge: 'Level 0 / Survival',
         callToAction: 'Enter Level 0',
         detailTitle: 'Level 0: The Lobby',
@@ -39,6 +41,7 @@ export const BACKROOM_LEVELS = [
         load: () => import('./levels/hotel/index.js'),
         accent: '#d9a066',
         preview: '/graphics/hotel-preview.jpg',
+        builtWith: 'Claude Opus 5.5',
         badge: 'Level 5 / Survival',
         callToAction: 'Enter Level 5',
         detailTitle: 'Level 5: Terror Hotel',

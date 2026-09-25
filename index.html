@@ -427,6 +427,34 @@
             color: var(--text-ghost);
         }
 
+        /* which AI model built the level */
+        .level-model {
+            position: relative;
+            z-index: 1;
+            padding-top: 10px;
+            border-top: 1px solid var(--border-dim);
+            color: var(--text-ghost);
+            font-size: 0.6rem;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+        }
+
+        .level-model b {
+            color: var(--tile-accent, var(--level-accent));
+            font-weight: 600;
+        }
+
+        .detail-model {
+            margin: 0;
+            color: var(--level-accent);
+            font-size: 0.8rem;
+            letter-spacing: 0.08em;
+        }
+
+        #detail-model-section[hidden] {
+            display: none;
+        }
+
         /* ═══════════════════════════════════════════
            DETAIL VIEW – dossier style
            ═══════════════════════════════════════════ */
@@ -764,6 +792,10 @@
                             <div>
                                 <h3>Field notes</h3>
                                 <ul id="detail-features"></ul>
+                            </div>
+                            <div id="detail-model-section">
+                                <h3>Built with</h3>
+                                <p id="detail-model" class="detail-model"></p>
                             </div>
                         </aside>
                     </div>
