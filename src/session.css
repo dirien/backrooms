@@ -50,11 +50,11 @@ meter::-moz-meter-bar { background: #cabe88; }
 .mobile .field-sanity { bottom: 250px; }
 .mobile .phone-prompt { bottom: 180px; }
 @media (max-width: 640px) { .field-sanity { left: 18px; } }
-.level-tile[data-level-id="lobby"], .level-tile[data-level-id="lobby"]:hover {
-    background: linear-gradient(180deg, #11130a30, #10120b95 40%, #090b08f5), url('/graphics/lobby-preview.jpg') center / cover;
+.level-tile.has-preview, .level-tile.has-preview:hover {
+    background: linear-gradient(180deg, #11130a30, #10120b95 40%, #090b08f5), var(--tile-preview) center / cover;
     min-height: 300px;
 }
-.level-tile[data-level-id="lobby"] .level-badge { background: #10120ccc; position: relative; z-index: 1; }
-.level-tile[data-level-id="lobby"] .level-name { color: #e5d99e; margin-top: 30px; }
-.level-tile[data-level-id="lobby"] .level-status { color: #c8bd91; }
-.level-tile[data-level-id="lobby"] .level-teaser { color: #c2b994; }
+.level-tile.has-preview .level-badge { background: #10120ccc; position: relative; z-index: 1; }
+.level-tile.has-preview .level-name { color: #e5d99e; margin-top: 30px; }
+.level-tile.has-preview .level-status { color: #c8bd91; }
+.level-tile.has-preview .level-teaser { color: #c2b994; }

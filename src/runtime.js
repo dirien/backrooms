@@ -1,5 +1,5 @@
-import { createTorch, TORCH_INTENSITY } from './lighting.js';
-import { settings, bindSessionUI, showFieldHUD, showSessionOverlay, hideSessionOverlay, showTransmission, updateFieldHUD } from './session-ui.js';
+import { createTorch, setFixtureLightColor, TORCH_INTENSITY } from './lighting.js';
+import { settings, bindSessionUI, setSessionCopy, showFieldHUD, showSessionOverlay, hideSessionOverlay, showTransmission, updateFieldHUD } from './session-ui.js';
 import { createExpedition, connectPhone, phoneId, advanceVitals, advanceSanity, recoverPhoneSanity, REQUIRED_CALLS, TRANSMISSIONS } from './expedition.js';
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -26,10 +26,11 @@ import {
     playAmbientFootsteps,
     playAmbientDoorClose,
     updateMasterDistortion,
-    updateKidsLaughDistortion,
+    updateLowSanityVoice,
     fadeAllAudioToSilence,
     resetAudioForStartScreen,
-    startGameAudio
+    startGameAudio,
+    configureLevelAudio
 } from './audio.js';
 import {
     createHUD,
@@ -62,20 +63,13 @@ import {
     initMouseControls,
     initTouchControls
 } from './input.js';
-import {
-    createGlobalResources,
-    loadOutletModel,
-    loadWallPhoneModel,
-    loadBacteriaModel,
-    getResources,
-    getMaterials,
-    getBacteriaModel
-} from './models.js';
-import { DEFAULT_LEVEL_ID, getLevelById } from './levels.js';
+import { loadBacteriaModel, getBacteriaModel } from './models.js';
+import { DEFAULT_LEVEL_ID, getLevelById, loadLevelDefinition } from './levels.js';
 import { randomBetween } from './random.js';
 
 /**
- * BACKROOMS - Level 0: The Lobby
+ * BACKROOMS runtime. Level-specific geometry, assets, copy, and audio come
+ * from the active level definition (src/levels/<id>/index.js).
  */
 
 let scene, camera, renderer, composer, clock;
@@ -102,6 +96,7 @@ let nearestPhoneDist = Infinity;
 let isInteractingWithPhone = false;
 let isSanityGameOver = false;
 let currentLevel = getLevelById(DEFAULT_LEVEL_ID);
+let activeLevel = null;
 let menuController = null;
 let ambientLight = null;
 let flashlight = null;
@@ -302,7 +297,8 @@ function interactWithPhone() {
     if (!nearestPhone || nearestPhoneDist > PHONE_INTERACT_DIST) return;
     if (!connectPhone(session, nearestPhone)) return;
     playPhonePickup();
-    showTransmission(TRANSMISSIONS[session.calls.size - 1], 9);
+    const transmissions = activeLevel.copy.transmissions ?? TRANSMISSIONS;
+    showTransmission(transmissions[session.calls.size - 1], 9);
     playerSanity = recoverPhoneSanity(playerSanity, session.calls.size);
     callCooldown = session.elapsed + 3;
     if (session.calls.size === REQUIRED_CALLS) {
@@ -411,7 +407,11 @@ function resetGameState() {
     clearWorldState();
     clearAmbientTimers();
 
-    resetBacteriaState(getMaterials());
+    resetBacteriaState(getDarkenableMaterials());
+}
+
+function getDarkenableMaterials() {
+    return activeLevel ? activeLevel.getDarkenableMaterials() : [];
 }
 
 let doorCloseTimeout = null;
@@ -540,7 +540,15 @@ export async function initGame(level = currentLevel, controller = null) {
     }
 
     menuController = controller ?? menuController;
+    // Create and resume audio inside the launch click, before any await.
+    initAudioContext();
+    resumeAudioContext();
+    // Load the level (and its assets) while the menu still shows the launch state.
+    const [definition] = await Promise.all([loadLevelDefinition(level), loadBacteriaModel()]);
     currentLevel = level;
+    activeLevel = definition;
+    setSessionCopy(definition.copy);
+    configureLevelAudio(definition.audio);
     startScreenElement.style.display = 'none';
     fpsCounterElement.style.display = profileEnabled ? 'block' : 'none';
     document.title = `Backrooms - ${currentLevel.detailTitle}`;
@@ -553,8 +561,6 @@ export async function initGame(level = currentLevel, controller = null) {
     nearestPhoneDist = Infinity;
     footstepDistance = 0;
     playerSanity = 100;
-    initAudioContext();
-    resumeAudioContext();
 
     const isRestart = Boolean(renderer && composer && fadePass);
 
@@ -566,8 +572,7 @@ export async function initGame(level = currentLevel, controller = null) {
     }
 
     if (isRestart) {
-        createGlobalResources(currentLevel.theme);
-        applyLevelTheme(currentLevel);
+        applyLevelEnvironment(activeLevel);
         applyRendererSize();
         if (bloomPass) {
             bloomPass.enabled = qualitySettings.bloom;
@@ -576,7 +581,7 @@ export async function initGame(level = currentLevel, controller = null) {
             postPass.enabled = qualitySettings.postEffects && settings.motion;
         }
         camera.position.set(0, 1.7, 0);
-        camera.rotation.set(0, 0, 0);
+        camera.rotation.set(0, activeLevel.spawnYaw ?? 0, 0);
 
         wakeupPass.uniforms.eyeOpen.value = 0.0;
         wakeupPass.uniforms.blurAmount.value = 1.0;
@@ -597,25 +602,15 @@ export async function initGame(level = currentLevel, controller = null) {
     }
 
     // First time initialization
-    initAudioContext();
-    createGlobalResources(currentLevel.theme);
-
-    await Promise.all([
-        loadOutletModel(),
-        loadWallPhoneModel(),
-        loadBacteriaModel()
-    ]);
-
     scene = new THREE.Scene();
-    applyLevelTheme(currentLevel);
 
     camera = new THREE.PerspectiveCamera(80, window.innerWidth / window.innerHeight, 0.1, 400);
     camera.position.set(0, 1.7, 0);
+    camera.rotation.set(0, activeLevel.spawnYaw ?? 0, 0);
 
     renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
     applyRendererSize();
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.15;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     document.body.append(renderer.domElement);
@@ -652,8 +647,9 @@ export async function initGame(level = currentLevel, controller = null) {
 
     clock = new THREE.Clock();
 
-    ambientLight = new THREE.AmbientLight(currentLevel.theme.ambientLightColor, currentLevel.theme.ambientLightIntensity);
+    ambientLight = new THREE.AmbientLight();
     scene.add(ambientLight);
+    applyLevelEnvironment(activeLevel);
 
     scene.add(camera);
     flashlight = createTorch(camera);
@@ -700,7 +696,7 @@ function beginSession() {
     applySettings();
     scheduleAmbientFootsteps();
     scheduleAmbientDoorClose();
-    showTransmission('Follow the ringing. Connect three different phones. Each call brings you back.', 12);
+    showTransmission(activeLevel.copy.arrival, 12);
     if (isMobileDevice()) activateControls();
     else {
         showSessionOverlay('ready', session);
@@ -860,7 +856,8 @@ function updatePlayerMovement(delta, isMobile) {
         camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, 1 - Math.exp(-delta * 6));
         camera.updateProjectionMatrix();
     }
-    flashlight.intensity = session.flashlight ? TORCH_INTENSITY * Math.min(1, session.battery / 12) : 0;
+    const torchIntensity = activeLevel.environment.torchIntensity ?? TORCH_INTENSITY;
+    flashlight.intensity = session.flashlight ? torchIntensity * Math.min(1, session.battery / 12) : 0;
 }
 
 function drainPlayerSanity(delta) {
@@ -884,7 +881,7 @@ function drainPlayerSanity(delta) {
 function updateRuntimeSystems() {
     const distortionStart = startProfile();
     updateMasterDistortion(playerSanity, debugSanityOverride);
-    updateKidsLaughDistortion(playerSanity, debugSanityOverride);
+    updateLowSanityVoice(playerSanity, debugSanityOverride);
     recordProfile('audio fx', distortionStart);
 
     refreshChunks(false);
@@ -899,13 +896,16 @@ function updateRuntimeSystems() {
         scene,
         walls,
         wallSpatialIndex,
-        getMaterials(),
+        getDarkenableMaterials(),
         isStarted,
         settings.difficulty === 'explore' ? 100 : playerSanity,
         settings.difficulty === 'explore' ? -1 : debugSanityOverride,
         session.elapsed * 1000,
     );
     recordProfile('entity', entityStart);
+
+    const effectiveSanity = debugSanityOverride >= 0 ? DEBUG_SANITY_LEVELS[debugSanityOverride] : playerSanity;
+    activeLevel.update?.({ sanity: effectiveSanity, elapsed: session.elapsed });
 
     if (postPass) {
         postPass.uniforms.time.value = session.elapsed;
@@ -919,12 +919,11 @@ function refreshChunks(force) {
     }
 
     const chunkStart = startProfile();
-    const resources = getResources();
     const result = updateChunks(
+        activeLevel,
         camera,
         scene,
         chunks,
-        resources,
         debugMode,
         debugNormals,
         chunkBorders,
@@ -1035,17 +1034,19 @@ function renderHud() {
     renderer.autoClear = true;
 }
 
-function applyLevelTheme(level) {
+function applyLevelEnvironment(level) {
     if (!scene) {
         return;
     }
 
-    scene.background = new THREE.Color(level.theme.sceneBackground);
-    scene.fog = new THREE.FogExp2(level.theme.fogColor, level.theme.fogDensity);
+    const { environment } = level;
+    scene.background = new THREE.Color(environment.background);
+    scene.fog = new THREE.FogExp2(environment.fogColor, environment.fogDensity);
+    renderer.toneMappingExposure = environment.exposure ?? 1.15;
+    setFixtureLightColor(environment.fixtureLight?.color);
 
     if (ambientLight) {
-        ambientLight.color.setHex(level.theme.ambientLightColor);
-        ambientLight.intensity = level.theme.ambientLightIntensity;
+        ambientLight.color.setHex(environment.ambientColor);
+        ambientLight.intensity = environment.ambientIntensity;
     }
-
 }

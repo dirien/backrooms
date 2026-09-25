@@ -3,7 +3,8 @@ import * as THREE from 'three';
 export const FIXTURE_LIGHT_RANGE = 7.5;
 export const FIXTURE_LIGHT_INTENSITY = 24;
 export const TORCH_INTENSITY = 36;
-const fixtureColor = new THREE.Color(0xffecc4);
+const DEFAULT_FIXTURE_COLOR = 0xffecc4;
+const fixtureColor = new THREE.Color(DEFAULT_FIXTURE_COLOR);
 const samplePosition = new THREE.Vector3();
 const sampleNormal = new THREE.Vector3();
 const normalMatrix = new THREE.Matrix3();
@@ -31,18 +32,24 @@ function wallBlocksLight(x, y, z, dx, dy, dz, box) {
     return near < 0.9999 && far > 0.0001;
 }
 
-export function createFixtureBakeContext(panels, walls) {
+// Levels tint every baked fixture with one shared colour uniform.
+export function setFixtureLightColor(color = DEFAULT_FIXTURE_COLOR) {
+    fixtureColor.setHex(color);
+}
+
+// `upward` scales light reaching surfaces above a fixture: flush domes shade their own ceiling.
+export function createFixtureBakeContext(panels, walls, { range = FIXTURE_LIGHT_RANGE, intensity = FIXTURE_LIGHT_INTENSITY, drop = 0.18, upward = 1 } = {}) {
     const lights = panels.map((panel) => {
         const position = panel.userData.worldPosition.clone();
-        position.y -= 0.18;
+        position.y -= drop;
         return {
             position,
             powered: panel.userData.powered,
             walls: walls.map((wall) => wall.userData.worldBox)
-                .filter((box) => box.distanceToPoint(position) < FIXTURE_LIGHT_RANGE),
+                .filter((box) => box.distanceToPoint(position) < range),
         };
     });
-    return { lights };
+    return { lights, range, intensity, upward };
 }
 
 export function sampleFixtureIrradiance(position, normal, context) {
@@ -50,6 +57,9 @@ export function sampleFixtureIrradiance(position, normal, context) {
     const x = position.x + normal.x * 0.012;
     const y = position.y + normal.y * 0.012;
     const z = position.z + normal.z * 0.012;
+    const range = context.range ?? FIXTURE_LIGHT_RANGE;
+    const intensity = context.intensity ?? FIXTURE_LIGHT_INTENSITY;
+    const upward = context.upward ?? 1;
     let irradiance = 0;
     for (const light of context.lights) {
         if (!light.powered) continue;
@@ -57,13 +67,14 @@ export function sampleFixtureIrradiance(position, normal, context) {
         const dy = light.position.y - y;
         const dz = light.position.z - z;
         const distanceSquared = dx * dx + dy * dy + dz * dz;
-        if (distanceSquared >= FIXTURE_LIGHT_RANGE ** 2) continue;
+        if (distanceSquared >= range ** 2) continue;
         const distance = Math.sqrt(distanceSquared);
         const cosine = Math.max(0, (dx * normal.x + dy * normal.y + dz * normal.z) / Math.max(distance, 0.001));
         if (cosine === 0) continue;
         if (light.walls.some((box) => wallBlocksLight(x, y, z, dx, dy, dz, box))) continue;
-        const cutoff = Math.max(0, 1 - (distance / FIXTURE_LIGHT_RANGE) ** 4) ** 2;
-        irradiance += FIXTURE_LIGHT_INTENSITY * cosine * cutoff / Math.max(distance ** 1.6, 0.01);
+        const cutoff = Math.max(0, 1 - (distance / range) ** 4) ** 2;
+        const shade = dy < 0 ? upward : 1;
+        irradiance += intensity * shade * cosine * cutoff / Math.max(distance ** 1.6, 0.01);
     }
     return irradiance;
 }

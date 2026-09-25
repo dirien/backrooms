@@ -54,16 +54,19 @@ export function createLevelMenu(levels, onLaunch) {
 
     function renderTiles() {
         const tileMarkup = levels.map((level) => {
-            const isPlayable = level.id === 'lobby';
+            const isPlayable = level.playable === true;
             const classes = ['level-tile'];
             if (level.id === currentLevelId) classes.push('selected');
             if (!isPlayable) classes.push('locked');
+            if (level.preview) classes.push('has-preview');
+            const previewStyle = level.preview ? `style="--tile-preview: url('${level.preview}')"` : '';
 
             return `
             <button
                 class="${classes.join(' ')}"
                 data-level-id="${level.id}"
                 type="button"
+                ${previewStyle}
                 ${isPlayable ? '' : 'disabled'}
             >
                 <span class="tile-static"></span>
@@ -94,7 +97,7 @@ export function createLevelMenu(levels, onLaunch) {
             return;
         }
 
-        startScreen.style.setProperty('--level-accent', level.theme.accent);
+        startScreen.style.setProperty('--level-accent', level.accent);
         titleElement.textContent = 'BACKROOMS';
         subtitleElement.textContent = 'Choose your descent';
         detailBadge.textContent = level.badge;

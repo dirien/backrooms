@@ -1,5 +1,5 @@
 import { PHONE_AUDIO_CLOSE_DIST, PHONE_AUDIO_MAX_DIST, DEBUG_SANITY_LEVELS } from './constants.js';
-import { randomBetween } from './random.js';
+import { randomBetween, randomFloat } from './random.js';
 
 /**
  * Audio system for ambient sounds and phone interaction
@@ -37,6 +37,36 @@ let masterDryGain = null;
 let masterOutput = null;
 let currentSanityFactor = 0;
 const distortionCurveCache = new Map();
+
+// Level audio profile. Levels override these through configureLevelAudio().
+const DEFAULT_LEVEL_AUDIO = {
+    ambientBell: false,
+    humGain: 1,
+    humRate: 1,
+    lowSanityVoice: 'laugh',
+    music: null,
+    stepLowpass: 0,
+};
+let levelAudio = { ...DEFAULT_LEVEL_AUDIO };
+
+// Gramophone music: record + crackle -> band-limited horn -> gain -> distortion input.
+const musicBuffers = new Map();
+let musicWanted = false;
+let musicSource = null;
+let crackleSource = null;
+let crackleBuffer = null;
+let musicInput = null;
+let musicGainNode = null;
+
+// Procedural whispers, used as a level's low-sanity voice.
+let whisperNoiseBuffer = null;
+let whisperSource = null;
+let whisperGain = null;
+let whisperLowFormant = null;
+let whisperHighFormant = null;
+let whisperPan = null;
+let nextWhisperTime = 0;
+let whisperSyllablesLeft = 0;
 
 // Export state getters
 export function getAudioContext() {
@@ -165,6 +195,8 @@ export async function loadAmbientSounds() {
 
         startHumSound();
         startPhoneRingSound();
+        musicWanted = true;
+        startMusic();
     } catch (error) {
         console.warn('Failed to load ambient sounds:', error);
     }
@@ -176,6 +208,7 @@ function startHumSound() {
     humSource = audioCtx.createBufferSource();
     humSource.buffer = humBuffer;
     humSource.loop = true;
+    humSource.playbackRate.value = levelAudio.humRate;
 
     humGainNode = audioCtx.createGain();
     humGainNode.gain.value = 0.12;
@@ -211,6 +244,7 @@ function restartHumSound() {
     humSource = audioCtx.createBufferSource();
     humSource.buffer = humBuffer;
     humSource.loop = true;
+    humSource.playbackRate.value = levelAudio.humRate;
 
     if (!humGainNode) {
         humGainNode = audioCtx.createGain();
@@ -269,7 +303,7 @@ export function updateHumVolume(camera, lightPanels) {
 
     const minDist = Math.sqrt(minDistSq);
     const proximity = Math.max(0, 1 - (minDist / maxDist));
-    const volume = 0.015 + proximity * 0.45;
+    const volume = (0.015 + proximity * 0.45) * levelAudio.humGain;
 
     humGainNode.gain.setTargetAtTime(volume, audioCtx.currentTime, 0.1);
 }
@@ -342,6 +376,14 @@ export function fadeAllAudioToSilence(duration) {
         kidsLaughGainNode.gain.linearRampToValueAtTime(0, fadeEndTime);
     }
 
+    // Fade the record and whispers to silence
+    for (const node of [musicGainNode, whisperGain]) {
+        if (!node) continue;
+        node.gain.cancelScheduledValues(currentTime);
+        node.gain.setValueAtTime(node.gain.value, currentTime);
+        node.gain.linearRampToValueAtTime(0, fadeEndTime);
+    }
+
     // Fade master output to silence
     if (masterOutput) {
         masterOutput.gain.setValueAtTime(masterOutput.gain.value, currentTime);
@@ -362,6 +404,9 @@ export function stopAllSounds() {
     phoneRingSource = stopAndClearSource(phoneRingSource);
     kidsLaughSource = stopAndClearSource(kidsLaughSource);
     isKidsLaughPlaying = false;
+    musicWanted = false;
+    stopMusic();
+    stopWhispers();
 
     // Reset gain nodes to zero
     if (humGainNode) {
@@ -427,6 +472,9 @@ export function startGameAudio() {
     if (phoneRingBuffer) {
         restartPhoneRingSound();
     }
+
+    musicWanted = true;
+    startMusic();
 }
 
 export function playPhonePickup() {
@@ -455,10 +503,20 @@ export function playPlayerStep(sprinting) {
     source.playbackRate.value = sprinting ? 1.15 : 0.9;
     gain.gain.setValueAtTime(sprinting ? 0.16 : 0.10, audioCtx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.23);
-    source.connect(gain);
+    let filter = null;
+    if (levelAudio.stepLowpass > 0) {
+        // Deep carpet swallows the heel strike.
+        filter = audioCtx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.value = levelAudio.stepLowpass;
+        source.connect(filter);
+        filter.connect(gain);
+    } else {
+        source.connect(gain);
+    }
     gain.connect(getDistortedOutput());
     source.start(0, 0, Math.min(0.25, footstepsBuffer.duration));
-    source.addEventListener('ended', () => { source.disconnect(); gain.disconnect(); });
+    source.addEventListener('ended', () => { source.disconnect(); filter?.disconnect(); gain.disconnect(); });
 }
 
 export function setAudioVolume(volume) {
@@ -572,13 +630,24 @@ function stopKidsLaughLoop() {
 }
 
 /**
- * Update kids laugh sound effects based on sanity level
+ * Update the level's low-sanity voice (kids laughing or whispers) and the
+ * record warp, based on sanity level. Called every frame.
  * @param {number} sanity - Current sanity (0-100)
  * @param {number} debugSanityOverride - Debug override index (-1 for none)
  */
-export function updateKidsLaughDistortion(sanity, debugSanityOverride) {
+export function updateLowSanityVoice(sanity, debugSanityOverride) {
     const effectiveSanity = debugSanityOverride >= 0 ? DEBUG_SANITY_LEVELS[debugSanityOverride] : sanity;
+    updateMusicWarp(effectiveSanity);
 
+    if (levelAudio.lowSanityVoice === 'whispers') {
+        updateWhispers(effectiveSanity);
+        return;
+    }
+
+    updateKidsLaugh(effectiveSanity);
+}
+
+function updateKidsLaugh(effectiveSanity) {
     // Start kids laugh when sanity drops to 50% or below
     if (effectiveSanity <= 50 && kidsLaughBuffer && !isKidsLaughPlaying) {
         startKidsLaughLoop();
@@ -643,7 +712,12 @@ export function playAmbientDoorClose(isStarted, playerSanity, debugSanityOverrid
 
     const effectiveSanity = debugSanityOverride >= 0 ? DEBUG_SANITY_LEVELS[debugSanityOverride] : playerSanity;
 
-    // Only play door sounds (kids laugh is now a continuous loop handled separately)
+    if (levelAudio.ambientBell && randomFloat() < 0.3) {
+        playDistantBell();
+        return randomBetween(15000, 40000);
+    }
+
+    // Only play door sounds (the low-sanity voice is a continuous loop handled separately)
     const source = audioCtx.createBufferSource();
     source.buffer = doorCloseBuffer;
 
@@ -698,4 +772,195 @@ function getPhoneRingVolume(minDistance) {
 
     const normalizedDistance = (minDistance - PHONE_AUDIO_CLOSE_DIST) / (PHONE_AUDIO_MAX_DIST - PHONE_AUDIO_CLOSE_DIST);
     return (1 - normalizedDistance) ** 3;
+}
+
+export function configureLevelAudio(profile = {}) {
+    stopMusic();
+    stopWhispers();
+    stopKidsLaughLoop();
+    levelAudio = { ...DEFAULT_LEVEL_AUDIO, ...profile };
+    if (levelAudio.music && audioCtx) loadMusicBuffer(levelAudio.music.url);
+}
+
+async function loadMusicBuffer(url) {
+    if (musicBuffers.has(url)) return;
+    musicBuffers.set(url, null);
+    try {
+        const response = await fetch(url);
+        musicBuffers.set(url, await audioCtx.decodeAudioData(await response.arrayBuffer()));
+        startMusic();
+    } catch (error) {
+        musicBuffers.delete(url);
+        console.warn('Failed to load level music:', error);
+    }
+}
+
+function createCrackleBuffer() {
+    const length = audioCtx.sampleRate * 4;
+    const buffer = audioCtx.createBuffer(1, length, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let index = 0; index < length; index++) {
+        const hiss = (randomFloat() - 0.5) * 0.05;
+        const pop = randomFloat() < 0.0006 ? (randomFloat() - 0.5) * 1.6 : 0;
+        data[index] = hiss + pop;
+    }
+    return buffer;
+}
+
+function ensureMusicChain() {
+    if (musicInput) return;
+    musicInput = audioCtx.createBiquadFilter();
+    musicInput.type = 'highpass';
+    musicInput.frequency.value = 260;
+    const horn = audioCtx.createBiquadFilter();
+    horn.type = 'lowpass';
+    horn.frequency.value = 3400;
+    horn.Q.value = 0.9;
+    musicGainNode = audioCtx.createGain();
+    musicGainNode.gain.value = 0;
+    musicInput.connect(horn);
+    horn.connect(musicGainNode);
+    musicGainNode.connect(getDistortedOutput());
+}
+
+// Starts the level record once its buffer is decoded and game audio is running.
+function startMusic() {
+    if (!audioCtx || !musicWanted || musicSource || !levelAudio.music) return;
+    const buffer = musicBuffers.get(levelAudio.music.url);
+    if (!buffer) {
+        if (!musicBuffers.has(levelAudio.music.url)) loadMusicBuffer(levelAudio.music.url);
+        return;
+    }
+    ensureMusicChain();
+    crackleBuffer ??= createCrackleBuffer();
+    musicSource = audioCtx.createBufferSource();
+    musicSource.buffer = buffer;
+    musicSource.loop = true;
+    musicSource.connect(musicInput);
+    crackleSource = audioCtx.createBufferSource();
+    crackleSource.buffer = crackleBuffer;
+    crackleSource.loop = true;
+    crackleSource.connect(musicInput);
+    const now = audioCtx.currentTime;
+    musicGainNode.gain.cancelScheduledValues(now);
+    musicGainNode.gain.setValueAtTime(0, now);
+    musicGainNode.gain.linearRampToValueAtTime(levelAudio.music.gain ?? 0.2, now + 3);
+    musicSource.start(now, randomBetween(0, buffer.duration * 0.8));
+    crackleSource.start(now);
+}
+
+function stopMusic() {
+    musicSource = stopAndClearSource(musicSource);
+    crackleSource = stopAndClearSource(crackleSource);
+    if (musicGainNode) musicGainNode.gain.value = 0;
+}
+
+// The record drags as sanity falls, as though the turntable is losing power.
+function updateMusicWarp(effectiveSanity) {
+    if (!musicSource) return;
+    const factor = effectiveSanity > 50 ? 0 : 1 - effectiveSanity / 50;
+    musicSource.playbackRate.setTargetAtTime(1 - factor * 0.16, audioCtx.currentTime, 1.2);
+}
+
+function createWhisperNoise() {
+    const length = audioCtx.sampleRate * 2;
+    const buffer = audioCtx.createBuffer(1, length, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    let brown = 0;
+    for (let index = 0; index < length; index++) {
+        const white = randomFloat() * 2 - 1;
+        brown = (brown + white * 0.08) * 0.97;
+        data[index] = white * 0.65 + brown;
+    }
+    return buffer;
+}
+
+function startWhispers() {
+    whisperNoiseBuffer ??= createWhisperNoise();
+    whisperSource = audioCtx.createBufferSource();
+    whisperSource.buffer = whisperNoiseBuffer;
+    whisperSource.loop = true;
+    whisperLowFormant = audioCtx.createBiquadFilter();
+    whisperLowFormant.type = 'bandpass';
+    whisperLowFormant.Q.value = 4;
+    whisperHighFormant = audioCtx.createBiquadFilter();
+    whisperHighFormant.type = 'bandpass';
+    whisperHighFormant.Q.value = 6;
+    whisperGain = audioCtx.createGain();
+    whisperGain.gain.value = 0;
+    whisperPan = audioCtx.createStereoPanner();
+    whisperSource.connect(whisperLowFormant);
+    whisperSource.connect(whisperHighFormant);
+    whisperLowFormant.connect(whisperGain);
+    whisperHighFormant.connect(whisperGain);
+    whisperGain.connect(whisperPan);
+    whisperPan.connect(getDistortedOutput());
+    whisperSource.start();
+    nextWhisperTime = audioCtx.currentTime + randomBetween(1, 3);
+    whisperSyllablesLeft = 0;
+}
+
+function stopWhispers() {
+    whisperSource = stopAndClearSource(whisperSource);
+    whisperGain?.disconnect();
+    whisperGain = null;
+}
+
+// Schedules breathy syllables ahead of the audio clock; phrases come from one
+// side at a time and arrive more often as sanity falls.
+function updateWhispers(effectiveSanity) {
+    if (!audioCtx) return;
+    if (effectiveSanity > 50) {
+        if (whisperSource) stopWhispers();
+        return;
+    }
+    if (!whisperSource) startWhispers();
+    const now = audioCtx.currentTime;
+    if (now < nextWhisperTime) return;
+
+    const factor = 1 - effectiveSanity / 50;
+    if (whisperSyllablesLeft <= 0) {
+        whisperSyllablesLeft = Math.floor(randomBetween(3, 10));
+        const side = randomFloat() < 0.5 ? -1 : 1;
+        whisperPan.pan.setValueAtTime(side * randomBetween(0.45, 0.95), now);
+    }
+    const start = Math.max(now, nextWhisperTime);
+    const attack = randomBetween(0.03, 0.08);
+    const length = randomBetween(0.1, 0.32);
+    const peak = (0.06 + factor * 0.14) * randomBetween(0.6, 1);
+    whisperLowFormant.frequency.setValueAtTime(randomBetween(700, 1500), start);
+    whisperHighFormant.frequency.setValueAtTime(randomBetween(2200, 4200), start);
+    whisperGain.gain.setValueAtTime(0.0001, start);
+    whisperGain.gain.linearRampToValueAtTime(peak, start + attack);
+    whisperGain.gain.exponentialRampToValueAtTime(0.0001, start + attack + length);
+    whisperSyllablesLeft--;
+    const pause = whisperSyllablesLeft > 0 ? randomBetween(0.04, 0.16) : randomBetween(2.5, 9) * (1 - factor * 0.6);
+    nextWhisperTime = start + attack + length + pause;
+}
+
+// A distant elevator arriving on a floor that is not yours.
+function playDistantBell() {
+    const now = audioCtx.currentTime;
+    const pan = audioCtx.createStereoPanner();
+    pan.pan.value = randomBetween(-0.9, 0.9);
+    const distance = audioCtx.createBiquadFilter();
+    distance.type = 'lowpass';
+    distance.frequency.value = randomBetween(1800, 3200);
+    const level = randomBetween(0.05, 0.11);
+    distance.connect(pan);
+    pan.connect(getDistortedOutput());
+    for (const [frequency, weight] of [[1046.5, 1], [2093, 0.35], [2637, 0.2]]) {
+        const tone = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        tone.frequency.value = frequency;
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(level * weight, now + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 2.4);
+        tone.connect(gain);
+        gain.connect(distance);
+        tone.start(now);
+        tone.stop(now + 2.5);
+        tone.addEventListener('ended', () => { tone.disconnect(); gain.disconnect(); });
+    }
+    setTimeout(() => { distance.disconnect(); pan.disconnect(); }, 2600);
 }

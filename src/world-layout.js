@@ -17,10 +17,3 @@ export function isPhoneChunk(cx, cz, phoneSeed = 0) {
     const candidate = getPhoneChunkForSector(Math.floor(cx / PHONE_SECTOR_SIZE), Math.floor(cz / PHONE_SECTOR_SIZE), phoneSeed);
     return candidate.x === cx && candidate.z === cz;
 }
-
-export function isFixturePowered(cx, cz, panelIndex) {
-    // Whole circuits fail as well as individual tubes. The arrival room is lit.
-    if (cx === 0 && cz === 0 && panelIndex === 4) return true;
-    const circuitFailed = (cx !== 0 || cz !== 0) && noise(cx * 719 + cz * 1433 + 59) < 0.22;
-    return !circuitFailed && noise(cx * 147 + cz * 317 + panelIndex * 37 + 11) > 0.18;
-}

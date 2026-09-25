@@ -9,6 +9,11 @@ export default defineConfig({
     target: 'esnext',
     rollupOptions: {
       output: {
+        // Name lazily loaded level chunks after their level (src/levels/<id>/index.js).
+        chunkFileNames: (chunk) => {
+          const level = chunk.facadeModuleId?.match(/src\/levels\/([^/]+)\/index\.js$/)?.[1];
+          return level ? `assets/level-${level}-[hash].js` : 'assets/[name]-[hash].js';
+        },
         manualChunks: {
           three: ['three'],
           'three-postprocessing': [
