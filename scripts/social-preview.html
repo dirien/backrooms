@@ -47,19 +47,21 @@
             background: #35331c; overflow: hidden;
             clip-path: polygon(0 0, calc(100% - 24px) 0, 100% 24px, 100% 100%, 0 100%);
         }
-        .room img { width: 100%; height: 100%; object-fit: cover; filter: brightness(.85) saturate(.75); }
-        .room::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, #0a0a0822 25%, transparent 45%, #0a0a08ee 100%); }
-        .badge { position: absolute; left: 22px; top: 22px; z-index: 1; border: 1px solid #d9c98a88; background: #0a0a08bb; padding: 7px 10px; font-size: 11px; letter-spacing: 1.7px; }
+        /* The featured level keeps its own accent, as its tile does in the menu. */
+        .room { --accent: #8fd9c2; border-color: #6f9d8f; border-bottom-color: var(--accent); }
+        .room img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 42%; filter: brightness(.94) saturate(.9); }
+        .room::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, #0a0a0833 0%, transparent 30%, transparent 56%, #0a0a08e0 100%); }
+        .badge { position: absolute; left: 22px; top: 22px; z-index: 1; border: 1px solid #8fd9c2aa; background: #0a0a08cc; padding: 7px 10px; font-size: 11px; letter-spacing: 1.7px; color: var(--accent); }
         .room-caption { position: absolute; left: 24px; right: 24px; bottom: 24px; z-index: 1; }
-        .room-caption small { font-size: 11px; letter-spacing: 2px; color: #c3b98a; }
+        .room-caption small { font-size: 11px; letter-spacing: 2px; color: var(--accent); }
         .room-caption h2 { font-family: "Special Elite", monospace; font-size: 38px; font-weight: 400; margin: 12px 0 0; letter-spacing: 2px; color: #e0d596; }
         footer {
             position: absolute; left: 0; right: 0; bottom: 0; height: 76px;
             display: flex; align-items: center; padding: 0 33px; gap: 35px; border-top: 1px solid #393625;
             font-size: 11px; letter-spacing: 1.2px;
         }
-        footer strong { font-weight: 400; color: #e0d596; }
-        .sealed { color: #777159; }
+        footer span { color: #aaa076; }
+        footer .new { color: #8fd9c2; }
         .browser { margin-left: auto; color: #aaa076; letter-spacing: 1.5px; }
         .scanlines {
             position: absolute; inset: 0; pointer-events: none;
@@ -75,17 +77,17 @@
             <h1>BACKROOMS</h1>
             <p class="subtitle">SIGNAL LOST</p>
             <p class="invitation">Follow the ringing.<br>Find a way out.</p>
-            <div class="cta">ENTER LEVEL 0 <span>→</span></div>
+            <div class="cta">ENTER LEVEL 37 <span>→</span></div>
         </div>
         <div class="room">
-            <img src="../public/graphics/lobby-preview.jpg" alt="Endless yellow rooms beneath fluorescent lights">
-            <span class="badge">LEVEL 0 / SURVIVAL</span>
-            <div class="room-caption"><small>// CONNECTION ESTABLISHED</small><h2>The Lobby</h2></div>
+            <img src="../public/graphics/pools-preview.jpg" alt="Green water around a curved wall of cream tile, lit by a patch of low sun">
+            <span class="badge">LEVEL 37 / SURVIVAL</span>
+            <div class="room-caption"><small>// NEW LEVEL UNSEALED</small><h2>The Poolrooms</h2></div>
         </div>
         <footer>
-            <strong>01 / THE LOBBY</strong>
-            <span class="sealed">02 / HOTEL · SEALED</span>
-            <span class="sealed">03 / POOLS · SEALED</span>
+            <span>LEVEL 0 / THE LOBBY</span>
+            <span>LEVEL 5 / TERROR HOTEL</span>
+            <span class="new">LEVEL 37 / THE POOLROOMS · NEW</span>
             <span class="browser">PLAY IN YOUR BROWSER ↗</span>
         </footer>
     </main>

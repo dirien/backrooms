@@ -1,6 +1,6 @@
 # Backrooms — Signal Lost
 
-A browser horror game built with Three.js. Wake up in Level 0 or Level 5, follow the ringing, and connect three different telephone lines to establish a way out.
+A browser horror game built with Three.js. Wake up in Level 0, Level 5, or Level 37, follow the ringing, and connect three different telephone lines to establish a way out.
 
 ## Play locally
 
@@ -11,7 +11,7 @@ npm install
 npm run dev -- --host 0.0.0.0
 ```
 
-Open http://localhost:5173, select **The Lobby** or **Terror Hotel**, and enter. Click **Begin exploration** to capture your mouse. The browser must support WebGL 2.
+Open http://localhost:5173, select **The Lobby**, **Terror Hotel**, or **The Poolrooms**, and enter. Click **Begin exploration** to capture your mouse. The browser must support WebGL 2.
 
 When running inside a Docker sandbox, publish the port from your host first (the sandbox name is `$SANDBOX_NAME` inside the sandbox):
 
@@ -21,11 +21,13 @@ sbx ports <sandbox-name> --publish 5173:5173
 
 ## Levels
 
-The level wall credits the AI model that built each level: Level 0 was built with GPT-6 Astra, Level 5 with Claude Opus 5.5.
+The level wall credits the AI model that built each level: Level 0 was built with GPT-6 Astra, Level 5 with Claude Opus 5.5, and Level 37 with Claude Fable 5.2.
 
 **Level 0: The Lobby.** The classic yellow office sprawl: damp carpet, humming fluorescent panels, and rooms that repeat just enough to feel wrong.
 
 **Level 5: Terror Hotel.** Following the Backrooms records, an endless hotel built in the 1930s and furnished a decade earlier. Corridors of mahogany-red damask panels and cream doors run to a vanishing point over red-and-gold patterned carpet. Room numbers are brass, never in sequence, and none of the doors open. Flush dome lamps buzz overhead and whole circuits fail. EXIT signs hang from the ceiling and lead nowhere. Dead ends hold brass elevators, grandfather clocks, and console tables under gilt-framed paintings. A 1920s dance record plays from speakers nobody has found, and slows as your sanity falls. Below half sanity, whispering replaces the silence behind you and the portraits' eyes start to catch the light. The objective is the same: answer three different house phones to reach the front desk.
+
+**Level 37: The Poolrooms.** An endless, spotless swimming complex with no entrance and no outside. Every wall is cream tile on a dark grid, eight tiles to the metre, and no tile is ever cut; the ceilings are smooth olive plaster. Halls open into each other through arcades, colonnades, gates, and narrow doors; canals run through arched tunnels from one hall into the next, and hall corners are rounded off wherever no opening comes near them. There are terraced pools that step down a ring at a time, lap pools with lane lines, flooded pillar halls, a lake with a tiled island and a lone pier rising into a light shaft, halls where knee-deep water winds between great curved walls, blocks or drums of solid tile with passages between them, and halls of ankle-deep water around a spiral stair: its steps rise out of the water, wind around a tiled column, and climb through a round hole in the ceiling into a shaft of light. You can climb it. It leads nowhere. A low sun falls through skylights with no sky behind them and lays hard-edged patches of light across walls, drums, and water; everything else is lit by what the tile throws back. The water is green, warm, still, and never deeper than your chest: the tile grid bends under it, you wade through it slower the deeper it gets, and every stride splashes and bubbles. You are barefoot, and on the deck every footfall is a soft slap on wet tile. Steel ladders wait at pool edges nobody has climbed out of, tiled tube slides curve out of the walls and end in a black mouth just above the water, a red slide coils three times around a column in the great pools and opens onto the water (the only loud colour on the level), and enamel signs state the rules; a few of them are wrong. Some halls have lost their light: their skylights are closed and their water is black; your torch, held down to a glimmer against the lit tile, opens up there like an eye adjusting. Below half sanity the surface will not settle, the water darkens, and something long and dark circles beneath it and comes in close when you wade. Nothing else makes a sound: no hum, no wind, no voices, only your feet, the water, and the drips. The objective is the same: answer three different poolside phones to reach the lifeguard station.
 
 ## Controls
 
@@ -46,7 +48,7 @@ Sprinting consumes stamina. After exhaustion, recover at least 30% before sprint
 
 **Wander** mode disables sanity loss and entity encounters. Settings include volume, mouse sensitivity, graphics quality, and camera effects; they persist locally. Reduced-motion preferences disable camera effects by default. Escape, window blur, or switching tabs pauses exploration.
 
-Level 0 and Level 5 are playable. The Pool route remains a sealed preview.
+Level 0, Level 5, and Level 37 are playable.
 
 ## Features
 
@@ -62,6 +64,8 @@ Level 0 and Level 5 are playable. The Pool route remains a sealed preview.
 - Chunk streaming, spatial collision queries, reusable geometry, and graphics presets
 - Level definitions loaded on demand: each level brings its own layout, materials, lighting, audio profile, and copy (see `src/levels/README.md`)
 - Level 5: procedural hotel corridors with guaranteed links between rows, dead-end alcoves, brass room-number plates, portraits that watch, gramophone jazz, and procedural whispers
+- Level 37: tiled halls generated on a 1 m cell grid with walls, arches, and canals that agree across chunk borders, plus curved walls (drums and rounded corners) with sliced collision; pools you wade through with a camera that follows the terraces; refraction, caustics, and depth absorption in the tile shader; hard-edged sunlight from a depth image of the halls seen from the sun, re-rendered only as the player moves (High and Balanced quality); one planar reflection shared by every water surface and the wet deck (High quality); bounced skylight baked per vertex; a climbable spiral stair through a round ceiling shaft (the ground sampler returns step heights; a rail of collision blocks keeps you on it), steel ladders, tube slides straight and coiled, lane lines, enamel signs, tall light shafts, a torch that adapts to each hall, and a shape under the water at low sanity
+- Level 37 is nearly silent: recorded bare feet on wet tile (eight footfalls, never the same one twice running), synthesised wading strides of splash and bubbles that deepen with the water, drips, and a short hall echo. No hum, no wind, no distant doors or footsteps, no voices; only the phones ring
 
 ## Development
 
@@ -73,6 +77,8 @@ npm run preview -- --host 0.0.0.0
 
 `?quality=desktop|mobile|low` overrides the graphics setting. `?profile` enables timing diagnostics. The Three.js vendor chunk produces an expected size warning during builds.
 
+Level 37 ships two assets of its own: the menu preview and a sprite of eight recorded barefoot footfalls. Its tile, signs, water, and every other sound are generated at runtime, and its phone is the Level 0 pay phone. `npm run assets:pools` rebuilds the footstep sprite from its CC0 source (network access and ffmpeg): it cuts eight footfalls out of the recording, brings them to the same peak, and lays them out in 0.4-second slots.
+
 `npm run assets:hotel [textures|models|audio]` rebuilds the Level 5 assets from their sources. It needs network access, Playwright Chromium, and ffmpeg for the audio step. Textures are drawn in `scripts/hotel-textures.html` and blended with CC0 scans, models are decimated to 512 px WebP textures with glTF Transform, and the record is trimmed into a loop.
 
 ## Tests
@@ -82,7 +88,7 @@ npx playwright install --with-deps chromium
 npm test
 ```
 
-Tests cover Level 5 loading, copy, spawn direction, stable house-phone placement, escape, and handing back to Level 0; hotel corridor connectivity, walkable corridors, door and panel spacing, and light that agrees across chunk borders; desktop movement, pausing, wall-blocked interactions, distinct calls, escape, loss, replay, mobile controls, Wander mode, stamina recovery, connectivity across 121 generated chunks, phone spacing across 3,600 chunks, rendered brightness with working lights, failed lights, and the torch; light blocked by walls and passed through doorways; lighting continuity across chunk borders; and visible lighting beyond the former 24-metre cutoff. Entity tests cover sanity gating, recovery, pause timing, failed-spawn cooldowns, animated dimensions, wall clearance, and the runtime sanity input. Browser tests use software WebGL at low quality; they do not benchmark hardware performance. Test-only controls are injected by Playwright and are absent from the shipped game.
+Tests cover Level 37 loading, copy, wading (the camera stepping down into a pool and back onto the deck), climbing a spiral stair into its shaft, a High-quality run of the sun and mirror passes with footsteps, stable poolside-phone placement, escape, and handing back to Level 0; pool-hall walls and canals that agree across chunk borders, an opening in every wall, fully walkable halls, water that never submerges the player, phone spots with clear footing, ladders, signs, lane lines, and slides that sit where their rules say, curved walls and skylights, the spiral stair's steps and rail, the coiled slide's collision, and light that agrees across chunk borders; Level 5 loading, copy, spawn direction, stable house-phone placement, escape, and handing back to Level 0; hotel corridor connectivity, walkable corridors, door and panel spacing, and light that agrees across chunk borders; desktop movement, pausing, wall-blocked interactions, distinct calls, escape, loss, replay, mobile controls, Wander mode, stamina recovery, connectivity across 121 generated chunks, phone spacing across 3,600 chunks, rendered brightness with working lights, failed lights, and the torch; light blocked by walls and passed through doorways; lighting continuity across chunk borders; and visible lighting beyond the former 24-metre cutoff. Entity tests cover sanity gating, recovery, pause timing, failed-spawn cooldowns, animated dimensions, wall clearance, and the runtime sanity input. Browser tests use software WebGL at low quality; they do not benchmark hardware performance. Test-only controls are injected by Playwright and are absent from the shipped game.
 
 ## Structure
 
@@ -95,6 +101,11 @@ Tests cover Level 5 loading, copy, spawn direction, stable house-phone placement
 - `src/lighting.js`: static fixture baking with wall occlusion, plus the dynamic shadow-casting torch
 - `src/audio.js`, `src/entity.js`, `src/input.js`: sound and level audio profiles, encounters, and controls
 - `src/models.js`, `src/shaders/`: shared asset loading, the entity model, and screen effects
+
+## Asset credits (Level 37)
+
+- Footsteps: "Footsteps, barefoot on wet tile" by SpliceSound, CC0, via [Freesound](https://freesound.org/people/SpliceSound/sounds/338106/).
+- Wading, drips, and the hall echo are synthesised with the Web Audio API. Tile, signs, and water are drawn at runtime.
 
 ## Asset credits (Level 5)
 

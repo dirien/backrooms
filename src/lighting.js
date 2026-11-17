@@ -3,6 +3,7 @@ import * as THREE from 'three';
 export const FIXTURE_LIGHT_RANGE = 7.5;
 export const FIXTURE_LIGHT_INTENSITY = 24;
 export const TORCH_INTENSITY = 36;
+export const TORCH_COLOR = 0xffedcc;
 const DEFAULT_FIXTURE_COLOR = 0xffecc4;
 const fixtureColor = new THREE.Color(DEFAULT_FIXTURE_COLOR);
 const samplePosition = new THREE.Vector3();
@@ -45,6 +46,8 @@ export function createFixtureBakeContext(panels, walls, { range = FIXTURE_LIGHT_
         return {
             position,
             powered: panel.userData.powered,
+            // Fixture records may carry their own brightness (`userData.intensity`).
+            scale: panel.userData.intensity ?? 1,
             walls: walls.map((wall) => wall.userData.worldBox)
                 .filter((box) => box.distanceToPoint(position) < range),
         };
@@ -74,9 +77,32 @@ export function sampleFixtureIrradiance(position, normal, context) {
         if (light.walls.some((box) => wallBlocksLight(x, y, z, dx, dy, dz, box))) continue;
         const cutoff = Math.max(0, 1 - (distance / range) ** 4) ** 2;
         const shade = dy < 0 ? upward : 1;
-        irradiance += intensity * shade * cosine * cutoff / Math.max(distance ** 1.6, 0.01);
+        irradiance += intensity * (light.scale ?? 1) * shade * cosine * cutoff / Math.max(distance ** 1.6, 0.01);
     }
     return irradiance;
+}
+
+// Unoriented light reaching a point: the same falloff and wall occlusion as
+// sampleFixtureIrradiance(), without the cosine term. Levels use it to
+// approximate light bouncing around a bright room.
+export function sampleFixtureFill(x, y, z, context) {
+    const range = context.range ?? FIXTURE_LIGHT_RANGE;
+    const intensity = context.intensity ?? FIXTURE_LIGHT_INTENSITY;
+    let fill = 0;
+    for (const light of context.lights) {
+        if (!light.powered) continue;
+        const dx = light.position.x - x;
+        const dy = light.position.y - y;
+        const dz = light.position.z - z;
+        const distanceSquared = dx * dx + dy * dy + dz * dz;
+        if (distanceSquared >= range ** 2) continue;
+        if (light.walls.some((box) => wallBlocksLight(x, y, z, dx, dy, dz, box))) continue;
+        const distance = Math.sqrt(distanceSquared);
+        const cutoff = Math.max(0, 1 - (distance / range) ** 4) ** 2;
+        // Clamped near the fixture: bounce never outshines direct light.
+        fill += intensity * (light.scale ?? 1) * cutoff / Math.max(distance ** 1.6, 4);
+    }
+    return fill;
 }
 
 function applyFixtureMaterial(material) {
@@ -111,6 +137,11 @@ function applyFixtureMaterial(material) {
 function bakeMesh(mesh, context) {
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     if (!materials.every((material) => material.isMeshStandardMaterial || material.isMeshLambertMaterial)) return;
+    // A level may bake a mesh itself (it then carries its own `fixtureIrradiance` attribute).
+    if (mesh.userData.ownsFixtureLighting) {
+        materials.forEach((material) => applyFixtureMaterial(material));
+        return;
+    }
     // Floor, ceiling, and prop clones share source geometry; the lighting belongs to this chunk.
     if (!mesh.userData.ownsGeometry) {
         mesh.geometry = mesh.geometry.clone();
@@ -144,7 +175,7 @@ export function bakeFixtureLighting(group, context) {
 }
 
 export function createTorch(camera) {
-    const torch = new THREE.SpotLight(0xffedcc, TORCH_INTENSITY, 24, Math.PI / 7, 0.5, 1.3);
+    const torch = new THREE.SpotLight(TORCH_COLOR, TORCH_INTENSITY, 24, Math.PI / 7, 0.5, 1.3);
     torch.position.set(0.18, -0.12, -0.1);
     torch.target.position.set(0, 0, -10);
     torch.castShadow = true;

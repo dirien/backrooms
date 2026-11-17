@@ -1,4 +1,4 @@
-import { createTorch, setFixtureLightColor, TORCH_INTENSITY } from './lighting.js';
+import { createTorch, setFixtureLightColor, TORCH_COLOR, TORCH_INTENSITY } from './lighting.js';
 import { settings, bindSessionUI, setSessionCopy, showFieldHUD, showSessionOverlay, hideSessionOverlay, showTransmission, updateFieldHUD } from './session-ui.js';
 import { createExpedition, connectPhone, phoneId, advanceVitals, advanceSanity, recoverPhoneSanity, REQUIRED_CALLS, TRANSMISSIONS } from './expedition.js';
 import * as THREE from 'three';
@@ -27,6 +27,7 @@ import {
     playAmbientDoorClose,
     updateMasterDistortion,
     updateLowSanityVoice,
+    updateLevelAmbience,
     fadeAllAudioToSilence,
     resetAudioForStartScreen,
     startGameAudio,
@@ -108,6 +109,12 @@ let hudTimer = 0;
 let footstepDistance = 0;
 let callCooldown = 0;
 let wakeupTimer = null;
+// Levels with a `ground` sampler lower the player into pools: the smoothed floor
+// height under the camera, the water depth there, and the current walking speed.
+let groundOffset = 0;
+let waterDepth = 0;
+let playerSpeed = 0;
+const levelFrame = { sanity: 100, elapsed: 0, camera: null, waterDepth: 0, speed: 0 };
 const activePhones = [];
 const phoneDirection = new THREE.Vector3();
 
@@ -150,6 +157,7 @@ const QUALITY_PRESETS = {
         bloom: true,
         postEffects: true,
         preloadDist: 4,
+        reflections: true,
         renderDist: 2,
         renderScale: 1,
     },
@@ -158,6 +166,7 @@ const QUALITY_PRESETS = {
         bloom: false,
         postEffects: true,
         preloadDist: 3,
+        reflections: false,
         renderDist: 2,
         renderScale: 0.85,
     },
@@ -166,6 +175,7 @@ const QUALITY_PRESETS = {
         bloom: false,
         postEffects: false,
         preloadDist: 2,
+        reflections: false,
         renderDist: 1,
         renderScale: 0.75,
     },
@@ -389,6 +399,7 @@ function resetGameState() {
 
     resetMovementState();
     velocity.set(0, 0, 0);
+    resetGround();
 
     hideHUD();
 
@@ -408,6 +419,12 @@ function resetGameState() {
     clearAmbientTimers();
 
     resetBacteriaState(getDarkenableMaterials());
+}
+
+function resetGround() {
+    groundOffset = 0;
+    waterDepth = 0;
+    playerSpeed = 0;
 }
 
 function getDarkenableMaterials() {
@@ -450,6 +467,7 @@ function animate() {
             updateFieldHUD(session, getPhoneSignalDistance(), getPhoneBearing());
         }
     }
+    activeLevel.beforeRender?.(renderer, scene, camera, qualitySettings);
     composer.render();
     if (!paused) renderHud();
 }
@@ -561,6 +579,7 @@ export async function initGame(level = currentLevel, controller = null) {
     nearestPhoneDist = Infinity;
     footstepDistance = 0;
     playerSanity = 100;
+    resetGround();
 
     const isRestart = Boolean(renderer && composer && fadePass);
 
@@ -653,6 +672,7 @@ export async function initGame(level = currentLevel, controller = null) {
 
     scene.add(camera);
     flashlight = createTorch(camera);
+    flashlight.color.setHex(activeLevel.environment.torchColor ?? TORCH_COLOR);
 
     createHUD();
 
@@ -822,7 +842,8 @@ function updatePlayerMovement(delta, isMobile) {
 
     if (movementInput.lengthSq() > 1) movementInput.normalize();
     const sprinting = advanceVitals(session, delta, movementInput.lengthSq() > 0.01, sprint || mobileSprint);
-    const speed = sprinting ? 6.6 : 3.6;
+    // Water drags at the legs: up to half speed when chest-deep.
+    const speed = (sprinting ? 6.6 : 3.6) * (1 - Math.min(0.5, waterDepth * 0.5));
 
     forwardDirection.set(0, 0, -1).applyQuaternion(camera.quaternion);
     forwardDirection.y = 0;
@@ -845,11 +866,15 @@ function updatePlayerMovement(delta, isMobile) {
     const distance = Math.hypot(nextCameraPosition.x - camera.position.x, nextCameraPosition.z - camera.position.z);
     session.distance += distance;
     footstepDistance += distance;
-    if (footstepDistance > (sprinting ? 2.1 : 1.65)) {
-        playPlayerStep(sprinting);
+    // Levels may set their own stride (metres between footfalls).
+    const stride = activeLevel.audio?.stride;
+    if (footstepDistance > (sprinting ? stride?.sprint ?? 2.1 : stride?.walk ?? 1.65)) {
+        playPlayerStep(sprinting, waterDepth);
         footstepDistance = 0;
     }
     camera.position.copy(nextCameraPosition);
+    playerSpeed = delta > 0 ? distance / delta : 0;
+    followGround(delta);
     if (settings.motion && distance > 0.001) camera.position.y += Math.sin(session.distance * 3.6) * (sprinting ? 0.045 : 0.018);
     const targetFov = settings.motion && sprinting ? 85 : 80;
     if (Math.abs(camera.fov - targetFov) > 0.01) {
@@ -858,6 +883,16 @@ function updatePlayerMovement(delta, isMobile) {
     }
     const torchIntensity = activeLevel.environment.torchIntensity ?? TORCH_INTENSITY;
     flashlight.intensity = session.flashlight ? torchIntensity * Math.min(1, session.battery / 12) : 0;
+}
+
+// Steps the camera down into pools and back up onto the deck.
+function followGround(delta) {
+    const ground = activeLevel.ground;
+    if (!ground) return;
+    const height = ground.heightAt(camera.position.x, camera.position.z);
+    groundOffset = THREE.MathUtils.damp(groundOffset, height, 9, delta);
+    waterDepth = Math.max(0, ground.waterLevel - height);
+    camera.position.y += groundOffset;
 }
 
 function drainPlayerSanity(delta) {
@@ -882,6 +917,7 @@ function updateRuntimeSystems() {
     const distortionStart = startProfile();
     updateMasterDistortion(playerSanity, debugSanityOverride);
     updateLowSanityVoice(playerSanity, debugSanityOverride);
+    updateLevelAmbience();
     recordProfile('audio fx', distortionStart);
 
     refreshChunks(false);
@@ -901,11 +937,16 @@ function updateRuntimeSystems() {
         settings.difficulty === 'explore' ? 100 : playerSanity,
         settings.difficulty === 'explore' ? -1 : debugSanityOverride,
         session.elapsed * 1000,
+        activeLevel.ground?.heightAt,
     );
     recordProfile('entity', entityStart);
 
-    const effectiveSanity = debugSanityOverride >= 0 ? DEBUG_SANITY_LEVELS[debugSanityOverride] : playerSanity;
-    activeLevel.update?.({ sanity: effectiveSanity, elapsed: session.elapsed });
+    levelFrame.sanity = debugSanityOverride >= 0 ? DEBUG_SANITY_LEVELS[debugSanityOverride] : playerSanity;
+    levelFrame.elapsed = session.elapsed;
+    levelFrame.camera = camera;
+    levelFrame.waterDepth = waterDepth;
+    levelFrame.speed = playerSpeed;
+    activeLevel.update?.(levelFrame);
 
     if (postPass) {
         postPass.uniforms.time.value = session.elapsed;
@@ -1044,6 +1085,7 @@ function applyLevelEnvironment(level) {
     scene.fog = new THREE.FogExp2(environment.fogColor, environment.fogDensity);
     renderer.toneMappingExposure = environment.exposure ?? 1.15;
     setFixtureLightColor(environment.fixtureLight?.color);
+    flashlight?.color.setHex(environment.torchColor ?? TORCH_COLOR);
 
     if (ambientLight) {
         ambientLight.color.setHex(environment.ambientColor);

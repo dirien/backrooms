@@ -12,7 +12,7 @@ try {
         await Promise.all([...document.images].map(image => image.decode()));
     });
     await page.screenshot({
-        path: fileURLToPath(new URL('../public/graphics/social-preview-v1.png', import.meta.url)),
+        path: fileURLToPath(new URL('../public/graphics/social-preview-v2.png', import.meta.url)),
         type: 'png',
     });
 } finally {
