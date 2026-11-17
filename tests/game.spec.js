@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { sampleFixtureIrradiance } from '../src/lighting.js';
 import { generateWallGrid } from '../src/levels/lobby/layout.js';
 import { createChunkLightingContext } from '../src/levels/lobby/chunk.js';
+import { STAIR, getChunkPlan } from '../src/levels/pools/layout.js';
 import { createExpedition, connectPhone, advanceVitals, advanceSanity, recoverPhoneSanity, REQUIRED_CALLS } from '../src/expedition.js';
 
 // Expose test controls only in intercepted source; the shipped game has no test API.
@@ -50,6 +51,8 @@ globalThis.expeditionTest = {
         return chunks.get(chunk.x + ',' + chunk.z).userData.phonePositions.map(position => position.toArray());
     },
     lose: () => { playerSanity = 0.001; },
+    move: (x, z) => { camera.position.set(x, 1.7, z); velocity.set(0, 0, 0); },
+    water: () => ({ depth: waterDepth, speed: playerSpeed }),
     lighting: (powered, torchOn) => {
         camera.position.set(0, 1.7, 0);
         camera.rotation.set(-0.65, 0, 0);
@@ -197,6 +200,86 @@ test('Level 5 loads its own world, copy and house phones, then hands back to Lev
     await expect(page.locator('#field-objective')).toHaveText('Connect three telephone lines');
     expect(await value(page, 'yaw')).toBe(0);
     expect(errors).toEqual([]);
+});
+
+function findStairHall() {
+    for (let ring = 1; ring < 12; ring++) {
+        for (let cx = -ring; cx <= ring; cx++) {
+            for (let cz = -ring; cz <= ring; cz++) {
+                const plan = getChunkPlan(cx, cz);
+                if (plan.stair) return plan;
+            }
+        }
+    }
+    throw new Error('No spiral stair near the arrival hall.');
+}
+
+test('Level 37 loads its halls, lowers the player into the pools, climbs a spiral stair, and connects poolside phones', async ({ page }) => {
+    const errors = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
+    await instrument(page);
+    await page.goto('/?quality=low');
+    await expect(page.locator('[data-level-id="pools"] .level-model')).toHaveText('Built with Claude Fable 5.2');
+    await expect(page.locator('[data-level-id="pools"]')).toBeEnabled();
+    await launch(page, 'pools');
+    await expect(page.locator('#field-archive')).toHaveText('ARCHIVE 037 / LEVEL 37');
+    await expect(page.locator('#field-objective')).toHaveText('Connect three poolside phones');
+    await expect.poll(async () => await value(page, 'chunks')).toBeGreaterThan(0);
+    // Standing on the deck keeps the eye at 1.7 m; the terraced pool ahead is 0.8 m deep at its centre.
+    expect(await value(page, 'height')).toBeCloseTo(1.7, 2);
+    await page.evaluate(() => globalThis.expeditionTest.move(0.5, -5.5));
+    await expect.poll(async () => await value(page, 'height'), { timeout: 15000 }).toBeLessThan(0.95);
+    expect(await value(page, 'height')).toBeGreaterThan(0.85);
+    const water = await page.evaluate(() => globalThis.expeditionTest.water());
+    expect(water.depth).toBeCloseTo(0.74, 2);
+    await page.evaluate(() => globalThis.expeditionTest.move(0, 0));
+    await expect.poll(async () => await value(page, 'height'), { timeout: 15000 }).toBeGreaterThan(1.65);
+    // The landing of the nearest spiral stair lifts the eye through the ceiling into the light shaft.
+    const stairHall = findStairHall();
+    const { stair } = stairHall;
+    const landing = stair.start + (stair.steps + 0.5) * stair.angle;
+    const reach = (STAIR.column + STAIR.radius) / 2;
+    await page.evaluate(([x, z]) => globalThis.expeditionTest.move(x, z), [stairHall.cx * 24 + stair.x + Math.cos(landing) * reach, stairHall.cz * 24 + stair.z + Math.sin(landing) * reach]);
+    await expect.poll(async () => await value(page, 'height'), { timeout: 15000 }).toBeGreaterThan(stairHall.height + 0.5);
+    await page.evaluate(() => globalThis.expeditionTest.move(0, 0));
+    await expect.poll(async () => await value(page, 'height'), { timeout: 15000 }).toBeLessThan(1.75);
+    const first = await page.evaluate(() => globalThis.expeditionTest.phoneSnapshot());
+    expect(first).toHaveLength(1);
+    expect(await page.evaluate(() => globalThis.expeditionTest.phoneSnapshot(true))).toEqual(first);
+    for (let calls = 1; calls <= 3; calls++) {
+        expect(await phone(page)).toBe(true);
+        await page.keyboard.press('KeyE');
+        await expect.poll(async () => await value(page, 'calls')).toBe(calls);
+        if (calls === 1) await expect(page.locator('#transmission')).toContainText('Lifeguard station');
+    }
+    await expect(page.locator('#session-title')).toHaveText('The water went still.', { timeout: 15000 });
+    await page.locator('#leave-game').click();
+    await launch(page, 'lobby');
+    await expect(page.locator('#field-archive')).toHaveText('ARCHIVE 001 / LEVEL 0');
+    expect(await value(page, 'height')).toBe(1.7);
+    expect(errors).toEqual([]);
+});
+
+test('Level 37 renders its sun and mirror passes at High quality and plays its footsteps without errors', async ({ page }) => {
+    const errors = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    page.on('console', (message) => { if (['error', 'warning'].includes(message.type())) errors.push(message.text()); });
+    await instrument(page);
+    await page.goto('/?quality=desktop');
+    const recording = page.waitForResponse((response) => response.url().endsWith('/sounds/pools/barefoot-wet-tile.mp3'));
+    await launch(page, 'pools');
+    const footsteps = await recording;
+    expect(footsteps.ok()).toBe(true);
+    await expect.poll(async () => await value(page, 'chunks')).toBeGreaterThan(0);
+    // Bare feet across the deck, then a few strides down the terraces into the pool.
+    await page.keyboard.down('KeyW');
+    await expect.poll(async () => await value(page, 'height'), { timeout: 30000 }).toBeLessThan(1.45);
+    await page.keyboard.up('KeyW');
+    const water = await page.evaluate(() => globalThis.expeditionTest.water());
+    expect(water.depth).toBeGreaterThan(0.3);
+    expect(await value(page, 'distance')).toBeGreaterThan(3);
+    expect(errors.filter((message) => !message.includes('GPU stall') && !message.includes('Automatic fallback to software WebGL'))).toEqual([]);
 });
 
 test('touch controls, torch, pause and Wander mode', async ({ browser }) => {

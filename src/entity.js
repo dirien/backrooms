@@ -91,7 +91,7 @@ function hideBacteriaEntity(materials) {
 }
 
 
-function spawnBacteriaEntity(minDist, maxDist, bacteriaModel, camera, scene, walls, wallSpatialIndex) {
+function spawnBacteriaEntity(minDist, maxDist, bacteriaModel, camera, scene, walls, wallSpatialIndex, groundHeightAt) {
     if (!bacteriaEntity) bacteriaEntity = createEntityModel(bacteriaModel);
     if (bacteriaEntity.parent !== scene) scene.add(bacteriaEntity);
     const player = camera.position;
@@ -105,7 +105,8 @@ function spawnBacteriaEntity(minDist, maxDist, bacteriaModel, camera, scene, wal
         const z = player.z + spawnDirection.z * distance;
         if (!hasLineOfSight(player.x, player.z, x, z, walls, wallSpatialIndex)) continue;
         if (entityCollidesWithWalls(x, z, bacteriaEntity.userData.halfWidth, walls, wallSpatialIndex)) continue;
-        bacteriaEntity.position.set(x, 0, z);
+        // It stands on the level's floor, including the bottom of a pool.
+        bacteriaEntity.position.set(x, groundHeightAt ? groundHeightAt(x, z) : 0, z);
         bacteriaEntity.rotation.set(0, Math.atan2(player.x - x, player.z - z), 0);
         bacteriaEntity.userData.walkBlend = 0;
         bacteriaEntity.userData.stride = 0;
@@ -116,7 +117,7 @@ function spawnBacteriaEntity(minDist, maxDist, bacteriaModel, camera, scene, wal
     return false;
 }
 
-function updateBacteriaMotion(currentTime, delta, sanityFactor, camera, walls, materials, wallSpatialIndex) {
+function updateBacteriaMotion(currentTime, delta, sanityFactor, camera, walls, materials, wallSpatialIndex, groundHeightAt) {
     const player = camera.position;
     const entity = bacteriaEntity;
     const dx = player.x - entity.position.x;
@@ -140,15 +141,16 @@ function updateBacteriaMotion(currentTime, delta, sanityFactor, camera, walls, m
     } else {
         entity.position.x = x;
         entity.position.z = z;
+        if (groundHeightAt) entity.position.y = groundHeightAt(x, z);
     }
     entity.rotation.set(0, Math.atan2(dx, dz), 0);
     animateEntityModel(entity, currentTime / 1000, delta, speed);
     entity.userData.distortionMaterial.uniforms.glitchIntensity.value = 0.3 + sanityFactor * 0.4;
-    entityWorldPosition.set(entity.position.x, 1, entity.position.z);
+    entityWorldPosition.set(entity.position.x, entity.position.y + 1, entity.position.z);
     updateEnvironmentDarkness(entityWorldPosition, true, 4 + sanityFactor * 3, 0.5 + sanityFactor * 0.4, materials);
 }
 
-export function updateBacteriaEntity(bacteriaModel, camera, scene, walls, wallSpatialIndex, materials, isStarted, playerSanity, debugSanityOverride, currentTime = performance.now()) {
+export function updateBacteriaEntity(bacteriaModel, camera, scene, walls, wallSpatialIndex, materials, isStarted, playerSanity, debugSanityOverride, currentTime = performance.now(), groundHeightAt = null) {
     if (!bacteriaModel || !camera || !isStarted) return;
     const sanity = debugSanityOverride >= 0 ? DEBUG_SANITY_LEVELS[debugSanityOverride] : playerSanity;
     const delta = THREE.MathUtils.clamp((currentTime - lastUpdateTime) / 1000, 0, 0.1);
@@ -165,7 +167,7 @@ export function updateBacteriaEntity(bacteriaModel, camera, scene, walls, wallSp
     const sanityFactor = THREE.MathUtils.clamp(1 - sanity / ENTITY_SANITY_THRESHOLD, 0, 1);
     if (bacteriaVisible) {
         if (currentTime - spawnStartTime >= visibleDuration) hideBacteriaEntity(materials);
-        else updateBacteriaMotion(currentTime, delta, sanityFactor, camera, walls, materials, wallSpatialIndex);
+        else updateBacteriaMotion(currentTime, delta, sanityFactor, camera, walls, materials, wallSpatialIndex, groundHeightAt);
         if (!bacteriaVisible) nextSpawnTime = currentTime + randomBetween(10000, 18000) * (1 - sanityFactor * 0.55);
         return;
     }
@@ -173,9 +175,9 @@ export function updateBacteriaEntity(bacteriaModel, camera, scene, walls, wallSp
     // Failed placements also get a cooldown, rather than retrying every frame.
     nextSpawnTime = currentTime + randomBetween(3000, 5000);
     const minDist = ENTITY_DISAPPEAR_DISTANCE + 3 + (1 - sanityFactor) * 4;
-    if (spawnBacteriaEntity(minDist, minDist + 10, bacteriaModel, camera, scene, walls, wallSpatialIndex)) {
+    if (spawnBacteriaEntity(minDist, minDist + 10, bacteriaModel, camera, scene, walls, wallSpatialIndex, groundHeightAt)) {
         spawnStartTime = currentTime;
         visibleDuration = randomBetween(6000, 9000) + sanityFactor * 3000;
-        updateBacteriaMotion(currentTime, 0, sanityFactor, camera, walls, materials, wallSpatialIndex);
+        updateBacteriaMotion(currentTime, 0, sanityFactor, camera, walls, materials, wallSpatialIndex, groundHeightAt);
     }
 }

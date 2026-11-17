@@ -41,11 +41,17 @@ const distortionCurveCache = new Map();
 // Level audio profile. Levels override these through configureLevelAudio().
 const DEFAULT_LEVEL_AUDIO = {
     ambientBell: false,
+    ambientDoor: true,
+    ambientSteps: true,
     humGain: 1,
     humRate: 1,
     lowSanityVoice: 'laugh',
     music: null,
+    reverb: null,
     stepLowpass: 0,
+    stepSprite: null,
+    steps: 'shoes',
+    water: false,
 };
 let levelAudio = { ...DEFAULT_LEVEL_AUDIO };
 
@@ -67,6 +73,19 @@ let whisperHighFormant = null;
 let whisperPan = null;
 let nextWhisperTime = 0;
 let whisperSyllablesLeft = 0;
+
+// Hall reverb: a send after the master filter into a generated impulse response.
+let reverbSend = null;
+let reverbConvolver = null;
+const reverbBuffers = new Map();
+
+// Recorded footfalls: one file of equal slots, one footfall per slot.
+const stepSprites = new Map();
+let lastStepSlot = -1;
+
+// Water: scattered drips, and the splashes of wading.
+let splashNoiseBuffer = null;
+let nextDripTime = 0;
 
 // Export state getters
 export function getAudioContext() {
@@ -197,6 +216,7 @@ export async function loadAmbientSounds() {
         startPhoneRingSound();
         musicWanted = true;
         startMusic();
+        startDrips();
     } catch (error) {
         console.warn('Failed to load ambient sounds:', error);
     }
@@ -211,7 +231,7 @@ function startHumSound() {
     humSource.playbackRate.value = levelAudio.humRate;
 
     humGainNode = audioCtx.createGain();
-    humGainNode.gain.value = 0.12;
+    humGainNode.gain.value = 0.12 * levelAudio.humGain;
 
     humSource.connect(humGainNode);
     humGainNode.connect(getDistortedOutput());
@@ -250,7 +270,7 @@ function restartHumSound() {
         humGainNode = audioCtx.createGain();
         humGainNode.connect(getDistortedOutput());
     }
-    humGainNode.gain.value = 0.12;
+    humGainNode.gain.value = 0.12 * levelAudio.humGain;
 
     humSource.connect(humGainNode);
     humSource.start();
@@ -286,7 +306,13 @@ export async function loadKidsLaughSound() {
 }
 
 export function updateHumVolume(camera, lightPanels) {
-    if (!humGainNode || !camera || lightPanels.length === 0) return;
+    if (!humGainNode || !camera) return;
+    if (levelAudio.humGain === 0) {
+        // A level without lamps to hum.
+        humGainNode.gain.setTargetAtTime(0, audioCtx.currentTime, 0.1);
+        return;
+    }
+    if (lightPanels.length === 0) return;
 
     let minDistSq = Infinity;
     const playerPos = camera.position;
@@ -475,6 +501,7 @@ export function startGameAudio() {
 
     musicWanted = true;
     startMusic();
+    startDrips();
 }
 
 export function playPhonePickup() {
@@ -495,8 +522,17 @@ export function playPhonePickup() {
     }
 }
 
-export function playPlayerStep(sprinting) {
-    if (!audioCtx || audioCtx.state !== 'running' || !footstepsBuffer) return;
+export function playPlayerStep(sprinting, waterDepth = 0) {
+    if (!audioCtx || audioCtx.state !== 'running') return;
+    if (waterDepth > 0.05) {
+        playWadingStep(sprinting, Math.min(1, waterDepth));
+        return;
+    }
+    if (levelAudio.steps === 'barefoot') {
+        playBarefootStep(sprinting);
+        return;
+    }
+    if (!footstepsBuffer) return;
     const source = audioCtx.createBufferSource();
     const gain = audioCtx.createGain();
     source.buffer = footstepsBuffer;
@@ -529,7 +565,7 @@ export function suspendAudio() {
 }
 
 export function playAmbientFootsteps(isStarted) {
-    if (!isStarted || !audioCtx || !footstepsBuffer) {
+    if (!isStarted || !audioCtx || !footstepsBuffer || !levelAudio.ambientSteps) {
         return;
     }
     if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -639,6 +675,8 @@ export function updateLowSanityVoice(sanity, debugSanityOverride) {
     const effectiveSanity = debugSanityOverride >= 0 ? DEBUG_SANITY_LEVELS[debugSanityOverride] : sanity;
     updateMusicWarp(effectiveSanity);
 
+    if (levelAudio.lowSanityVoice === 'none') return;
+
     if (levelAudio.lowSanityVoice === 'whispers') {
         updateWhispers(effectiveSanity);
         return;
@@ -717,6 +755,8 @@ export function playAmbientDoorClose(isStarted, playerSanity, debugSanityOverrid
         return randomBetween(15000, 40000);
     }
 
+    if (!levelAudio.ambientDoor) return randomBetween(15000, 40000);
+
     // Only play door sounds (the low-sanity voice is a continuous loop handled separately)
     const source = audioCtx.createBufferSource();
     source.buffer = doorCloseBuffer;
@@ -780,6 +820,292 @@ export function configureLevelAudio(profile = {}) {
     stopKidsLaughLoop();
     levelAudio = { ...DEFAULT_LEVEL_AUDIO, ...profile };
     if (levelAudio.music && audioCtx) loadMusicBuffer(levelAudio.music.url);
+    if (levelAudio.stepSprite && audioCtx) loadStepSprite(levelAudio.stepSprite);
+    applyLevelReverb();
+}
+
+// Finds where each footfall begins inside its slot, so playback starts on the
+// foot and not on the silence (or codec padding) before it.
+function findStepOnsets(buffer, { count, slot }) {
+    const data = buffer.getChannelData(0);
+    const slotSamples = Math.floor(slot * buffer.sampleRate);
+    const onsets = [];
+    for (let index = 0; index < count; index++) {
+        const from = index * slotSamples;
+        const to = Math.min(data.length, from + slotSamples);
+        let peak = 0;
+        for (let sample = from; sample < to; sample++) peak = Math.max(peak, Math.abs(data[sample]));
+        let onset = from;
+        while (onset < to && Math.abs(data[onset]) < peak * 0.08) onset++;
+        onsets.push(Math.max(from, onset - Math.floor(0.004 * buffer.sampleRate)) / buffer.sampleRate);
+    }
+    return onsets;
+}
+
+async function loadStepSprite(sprite) {
+    if (stepSprites.has(sprite.url)) return;
+    stepSprites.set(sprite.url, null);
+    try {
+        const response = await fetch(sprite.url);
+        const buffer = await audioCtx.decodeAudioData(await response.arrayBuffer());
+        stepSprites.set(sprite.url, { buffer, onsets: findStepOnsets(buffer, sprite) });
+    } catch (error) {
+        stepSprites.delete(sprite.url);
+        console.warn('Failed to load footstep recordings:', error);
+    }
+}
+
+// Plays one recorded footfall: never the same one twice running, each a touch
+// faster or slower than recorded, from alternating sides.
+function playRecordedStep(sprinting, sprite, { buffer, onsets }) {
+    let slot = Math.floor(randomBetween(0, onsets.length));
+    if (slot === lastStepSlot) slot = (slot + 1) % onsets.length;
+    lastStepSlot = slot;
+    const source = audioCtx.createBufferSource();
+    const gain = audioCtx.createGain();
+    const panner = audioCtx.createStereoPanner();
+    source.buffer = buffer;
+    source.playbackRate.value = sprinting ? randomBetween(1.04, 1.14) : randomBetween(0.94, 1.05);
+    gain.gain.value = (sprinting ? 0.34 : 0.25) * randomBetween(0.8, 1.1);
+    panner.pan.value = barefootSide * randomBetween(0.05, 0.14);
+    barefootSide = -barefootSide;
+    source.connect(gain);
+    gain.connect(panner);
+    panner.connect(getDistortedOutput());
+    source.start(audioCtx.currentTime, onsets[slot], (slot + 1) * sprite.slot - onsets[slot] - 0.005);
+    source.addEventListener('ended', () => { source.disconnect(); gain.disconnect(); panner.disconnect(); });
+}
+
+// Deterministic white noise for generated buffers (-1…1).
+function createNoise(seed) {
+    let state = seed >>> 0 || 1;
+    return () => {
+        state ^= state << 13;
+        state >>>= 0;
+        state ^= state >>> 17;
+        state ^= state << 5;
+        state >>>= 0;
+        return state / 2147483648 - 1;
+    };
+}
+
+// A large hard-surfaced hall: a few slap-back echoes, then a long tail that darkens as it decays.
+function createImpulseResponse(seconds) {
+    const length = Math.floor(audioCtx.sampleRate * seconds);
+    const buffer = audioCtx.createBuffer(2, length, audioCtx.sampleRate);
+    for (let channel = 0; channel < 2; channel++) {
+        const data = buffer.getChannelData(channel);
+        const noise = createNoise(0x9e3779b9 + channel * 7919);
+        let smooth = 0;
+        for (let index = 0; index < length; index++) {
+            const progress = index / length;
+            smooth += (noise() - smooth) * (0.8 - progress * 0.62);
+            data[index] = smooth * Math.exp(-6.4 * progress);
+        }
+        for (const [delay, level] of [[0.043, 0.5], [0.071, 0.38], [0.118, 0.3], [0.163, 0.2]]) {
+            const at = Math.floor((delay + channel * 0.009) * audioCtx.sampleRate);
+            if (at < length) data[at] += level;
+        }
+    }
+    return buffer;
+}
+
+function applyLevelReverb() {
+    if (!audioCtx || !masterFilter) return;
+    const reverb = levelAudio.reverb;
+    if (!reverb) {
+        if (reverbSend) reverbSend.gain.value = 0;
+        return;
+    }
+    if (!reverbSend) {
+        reverbSend = audioCtx.createGain();
+        reverbConvolver = audioCtx.createConvolver();
+        masterFilter.connect(reverbSend);
+        reverbSend.connect(reverbConvolver);
+        reverbConvolver.connect(masterOutput);
+    }
+    if (!reverbBuffers.has(reverb.seconds)) reverbBuffers.set(reverb.seconds, createImpulseResponse(reverb.seconds));
+    reverbConvolver.buffer = reverbBuffers.get(reverb.seconds);
+    reverbSend.gain.value = reverb.gain ?? 0.4;
+}
+
+function getSplashNoise() {
+    if (!splashNoiseBuffer) {
+        const length = audioCtx.sampleRate;
+        splashNoiseBuffer = audioCtx.createBuffer(1, length, audioCtx.sampleRate);
+        const data = splashNoiseBuffer.getChannelData(0);
+        const noise = createNoise(0x51ed270b);
+        for (let index = 0; index < length; index++) data[index] = noise();
+    }
+    return splashNoiseBuffer;
+}
+
+function startDrips() {
+    if (audioCtx && levelAudio.water) nextDripTime = audioCtx.currentTime + randomBetween(1, 4);
+}
+
+// A short burst of the shared noise through one filter, with its own envelope.
+function playNoiseBurst(time, { type, from, to = from, q = 1, level, attack, length, pan = 0 }) {
+    const source = audioCtx.createBufferSource();
+    const filter = audioCtx.createBiquadFilter();
+    const gain = audioCtx.createGain();
+    const panner = audioCtx.createStereoPanner();
+    source.buffer = getSplashNoise();
+    filter.type = type;
+    filter.Q.value = q;
+    filter.frequency.setValueAtTime(from, time);
+    if (to !== from) filter.frequency.exponentialRampToValueAtTime(to, time + length);
+    gain.gain.setValueAtTime(0.0001, time);
+    gain.gain.exponentialRampToValueAtTime(level, time + attack);
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + length);
+    panner.pan.value = pan;
+    source.connect(filter);
+    filter.connect(gain);
+    gain.connect(panner);
+    panner.connect(getDistortedOutput());
+    source.start(time, randomBetween(0, 0.4), length + 0.05);
+    source.addEventListener('ended', () => { source.disconnect(); filter.disconnect(); gain.disconnect(); panner.disconnect(); });
+}
+
+// A sine that slides in pitch: the body of a footfall, or a bubble closing.
+function playTone(time, { from, to, level, attack, length, pan = 0 }) {
+    const tone = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    const panner = audioCtx.createStereoPanner();
+    tone.frequency.setValueAtTime(from, time);
+    tone.frequency.exponentialRampToValueAtTime(to, time + length);
+    gain.gain.setValueAtTime(0.0001, time);
+    gain.gain.exponentialRampToValueAtTime(level, time + attack);
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + length);
+    panner.pan.value = pan;
+    tone.connect(gain);
+    gain.connect(panner);
+    panner.connect(getDistortedOutput());
+    tone.start(time);
+    tone.stop(time + length + 0.02);
+    tone.addEventListener('ended', () => { tone.disconnect(); gain.disconnect(); panner.disconnect(); });
+}
+
+let barefootSide = 1;
+
+// One contact of a bare foot with tile: unpitched, soft-edged, and dull. Most
+// of it sits below a few hundred hertz (the weight landing); a band around
+// one kilohertz adds the flat pat of skin on a hard floor.
+function playFootContact(time, level, body, slap, pan) {
+    playNoiseBurst(time, { type: 'lowpass', from: body, q: 0.9, level, attack: 0.008, length: 0.12, pan });
+    playNoiseBurst(time, { type: 'bandpass', from: slap, q: 1, level: level * 0.42, attack: 0.004, length: 0.06, pan });
+}
+
+// A bare footfall on wet tile. Levels bring recordings (`stepSprite`); until
+// they have loaded, or if they cannot be, two synthesised pats stand in: the
+// heel lands, then the sole slaps down flat.
+function playBarefootStep(sprinting) {
+    const recorded = levelAudio.stepSprite && stepSprites.get(levelAudio.stepSprite.url);
+    if (recorded) {
+        playRecordedStep(sprinting, levelAudio.stepSprite, recorded);
+        return;
+    }
+    const now = audioCtx.currentTime;
+    const effort = (sprinting ? 1.35 : 1) * randomBetween(0.8, 1.1);
+    const pan = barefootSide * randomBetween(0.05, 0.14);
+    barefootSide = -barefootSide;
+    const roll = sprinting ? randomBetween(0.03, 0.045) : randomBetween(0.055, 0.085);
+    playFootContact(now, 0.55 * effort, randomBetween(230, 300), randomBetween(650, 850), pan);
+    playFootContact(now + roll, 0.8 * effort, randomBetween(320, 420), randomBetween(900, 1250), pan);
+}
+
+// A stride through water: the leg breaks the surface with a short splash,
+// then the water it moved closes behind it in a run of small bubbles, and a
+// few drops fall back. Shallow water is bright and quick; deep water lower and slower.
+function playWadingStep(sprinting, depth) {
+    const now = audioCtx.currentTime;
+    const effort = sprinting ? 1.4 : 1;
+    const pan = randomBetween(-0.3, 0.3);
+    playSplash(now, 0.12 * effort * (0.65 + depth * 0.4), pan, randomBetween(2200, 2900) - depth * 1200, 0.16 + depth * 0.1);
+    const bubbles = Math.round(randomBetween(4, 7) + depth * 3);
+    for (let bubble = 0; bubble < bubbles; bubble++) {
+        const pitch = randomBetween(420, 1300) * (1 - depth * 0.35);
+        playTone(now + randomBetween(0.04, 0.3 + depth * 0.18), {
+            from: pitch,
+            to: pitch * randomBetween(1.35, 1.9),
+            level: randomBetween(0.02, 0.045) * effort,
+            attack: 0.004,
+            length: randomBetween(0.025, 0.06),
+            pan: pan + randomBetween(-0.2, 0.2),
+        });
+    }
+    scheduleDrip(now + randomBetween(0.22, 0.36), 0.5);
+    if (randomFloat() < 0.6) scheduleDrip(now + randomBetween(0.38, 0.6), 0.4);
+}
+
+// A drop falling into still water: a short sine chirp that rises as the bubble closes.
+function scheduleDrip(time, loudness = 1) {
+    const tone = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    const pan = audioCtx.createStereoPanner();
+    const pitch = randomBetween(650, 1900);
+    const length = randomBetween(0.05, 0.11);
+    tone.frequency.setValueAtTime(pitch, time);
+    tone.frequency.exponentialRampToValueAtTime(pitch * randomBetween(1.5, 2.4), time + length * 0.6);
+    gain.gain.setValueAtTime(0.0001, time);
+    gain.gain.exponentialRampToValueAtTime(randomBetween(0.02, 0.06) * loudness, time + 0.004);
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + length);
+    pan.pan.value = randomBetween(-0.9, 0.9);
+    tone.connect(gain);
+    gain.connect(pan);
+    pan.connect(getDistortedOutput());
+    tone.start(time);
+    tone.stop(time + length + 0.02);
+    tone.addEventListener('ended', () => { tone.disconnect(); gain.disconnect(); pan.disconnect(); });
+}
+
+// Water thrown aside: a noise burst that falls in pitch, over a soft low thump.
+function playSplash(time, level, pan, brightness, length) {
+    const source = audioCtx.createBufferSource();
+    const band = audioCtx.createBiquadFilter();
+    const gain = audioCtx.createGain();
+    const panner = audioCtx.createStereoPanner();
+    source.buffer = getSplashNoise();
+    band.type = 'bandpass';
+    band.Q.value = 0.7;
+    band.frequency.setValueAtTime(brightness, time);
+    band.frequency.exponentialRampToValueAtTime(brightness * 0.3, time + length);
+    gain.gain.setValueAtTime(0.0001, time);
+    gain.gain.exponentialRampToValueAtTime(level, time + 0.018);
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + length);
+    panner.pan.value = pan;
+    source.connect(band);
+    band.connect(gain);
+    gain.connect(panner);
+    panner.connect(getDistortedOutput());
+    source.start(time, randomBetween(0, 0.5), length + 0.05);
+    source.addEventListener('ended', () => { source.disconnect(); band.disconnect(); gain.disconnect(); panner.disconnect(); });
+
+    const thump = audioCtx.createOscillator();
+    const thumpGain = audioCtx.createGain();
+    thump.frequency.setValueAtTime(150, time);
+    thump.frequency.exponentialRampToValueAtTime(60, time + 0.16);
+    thumpGain.gain.setValueAtTime(0.0001, time);
+    thumpGain.gain.exponentialRampToValueAtTime(level * 0.7, time + 0.02);
+    thumpGain.gain.exponentialRampToValueAtTime(0.0001, time + 0.2);
+    thump.connect(thumpGain);
+    thumpGain.connect(panner);
+    thump.start(time);
+    thump.stop(time + 0.22);
+    thump.addEventListener('ended', () => { thump.disconnect(); thumpGain.disconnect(); });
+}
+
+/**
+ * Per-frame ambience for levels with water: scattered drips, scheduled on the
+ * audio clock.
+ */
+export function updateLevelAmbience() {
+    if (!audioCtx || !levelAudio.water || audioCtx.state !== 'running') return;
+    const now = audioCtx.currentTime;
+    if (now < nextDripTime) return;
+    scheduleDrip(now + 0.02);
+    if (randomFloat() < 0.35) scheduleDrip(now + randomBetween(0.12, 0.3));
+    nextDripTime = now + randomBetween(1.2, 6.5);
 }
 
 async function loadMusicBuffer(url) {

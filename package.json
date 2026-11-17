@@ -10,6 +10,7 @@
     "build": "vite build",
     "social:preview": "node scripts/generate-social-preview.mjs",
     "assets:hotel": "node scripts/generate-hotel-assets.mjs",
+    "assets:pools": "node scripts/generate-pool-assets.mjs",
     "preview": "vite preview",
     "test": "playwright test"
   },
